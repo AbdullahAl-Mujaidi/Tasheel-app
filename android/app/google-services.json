@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "35492176424",
+    "project_id": "tashel-a589d",
+    "storage_bucket": "tashel-a589d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:35492176424:android:bcd049064a4ae5e6418b1d",
+        "android_client_info": {
+          "package_name": "com.example.fkra"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyABWa0LjFrKBQkMSMxPX5yauH6axbOpddk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

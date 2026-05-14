@@ -1,0 +1,24 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "fkra (debug mode)",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "debug",  // ✅ أضف هذا السطر
+            "args": []  // ✅ أضف هذا للتأكد
+        },
+        {
+            "name": "fkra (profile mode)",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "profile"
+        },
+        {
+            "name": "fkra (release mode)",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "release"
+        }
+    ]
+}
