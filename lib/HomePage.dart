@@ -1,10 +1,10 @@
+import 'package:fkra/view/business_view.dart';
+import 'package:fkra/view/expense_view.dart';
+import 'package:fkra/view/home_view.dart';
+import 'package:fkra/view/report_view.dart';
+import 'package:fkra/view/settings_view.dart';
+import 'package:fkra/view/workers_view.dart';
 import 'package:flutter/material.dart';
-import 'package:fkra/BusinessPage.dart';
-import 'package:fkra/ExpensesPage.dart';
-import 'package:fkra/ReportsPage.dart';
-import 'package:fkra/SettingsPage.dart';
-import 'package:fkra/WorkersPage.dart';
-import 'package:fkra/home.dart';
 
 class Homepage extends StatefulWidget {
   final String userId;
