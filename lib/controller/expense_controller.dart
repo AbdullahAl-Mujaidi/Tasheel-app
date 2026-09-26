@@ -1,6 +1,11 @@
-// lib/controllers/expense_controller.dart
+// ignore_for_file: avoid_print
 import 'dart:async';
+import 'package:fkra/admin/services/admin_session_service.dart';
 import 'package:fkra/model/expense_model.dart';
+import 'package:fkra/model/team_member_model.dart';
+import 'package:fkra/services/activity_service.dart';
+import 'package:fkra/services/analytics_service.dart';
+import 'package:fkra/services/member_session_service.dart';
 import 'package:flutter/material.dart';
 
 class ExpenseController extends ChangeNotifier {
@@ -26,6 +31,9 @@ class ExpenseController extends ChangeNotifier {
     'مواد ومستلزمات',
     'نقل ومواصلات',
     'اكل ومشروبات',
+    'أجور',
+    'سلف',
+    'عمال',
     'اخرى',
   ];
 
@@ -61,6 +69,7 @@ class ExpenseController extends ChangeNotifier {
   Future<void> _syncWithFirestore() async {
     try {
       await _model.syncWithFirestore(expenses);
+      await _model.loadLocalExpenses();
       expenses = List.from(_model.localExpenses);
       notifyListeners();
     } catch (e) {
@@ -76,11 +85,37 @@ class ExpenseController extends ChangeNotifier {
   }
 
   // ========== عمليات المصروفات ==========
-  Future<void> addExpense(BuildContext context) async {
-    if (!formKey.currentState!.validate()) return;
+  Future<bool> addExpense(BuildContext context) async {
+    if (AdminSessionService.instance.role != null) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('حساب المدير مخصص للإدارة والإشراف فقط، ولا يمكنه إضافة مصروفات.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return false;
+    }
+
+    if (MemberSessionService.instance.isSubUser &&
+        !MemberSessionService.instance.canCreate(TeamPermissions.expenses)) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('لا تملك صلاحية إضافة مصروفات.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return false;
+    }
+
+    if (!formKey.currentState!.validate()) return false;
 
     final expenseId = DateTime.now().millisecondsSinceEpoch.toString();
     final createdAt = DateTime.now().toIso8601String();
+    final actor = MemberSessionService.instance.actor;
 
     Map<String, dynamic> expenseData = {
       'id': expenseId,
@@ -90,34 +125,58 @@ class ExpenseController extends ChangeNotifier {
       'date': date.toIso8601String(),
       'synced': 0,
       'createdAt': createdAt,
+      'createdByLabel': actor.label,
+      'createdByRole': actor.role,
+      'createdByUid': actor.uid,
     };
 
     expenses.insert(0, expenseData);
     await _model.saveExpensesToFile(expenses);
     notifyListeners();
 
-    final hasInternet = await _model.hasInternet();
-    if (hasInternet) {
-      try {
-        await _model.saveExpenseToFirestore(expenseData, false);
-        final index = expenses.indexWhere((e) => e['id'] == expenseId);
-        if (index != -1) {
-          expenses[index]['synced'] = 1;
-          await _model.saveExpensesToFile(expenses);
+    unawaited(() async {
+      final hasInternet = await _model.hasInternet();
+      if (hasInternet) {
+        try {
+          await _model.saveExpenseToFirestore(expenseData, false);
+          final index = expenses.indexWhere((e) => e['id'] == expenseId);
+          if (index != -1) {
+            expenses[index]['synced'] = 1;
+            await _model.saveExpensesToFile(expenses);
+          }
+          notifyListeners();
+        } catch (e) {
+          print('فشل رفع المصروف: $e');
         }
-        notifyListeners();
-      } catch (e) {
-        print('فشل رفع المصروف: $e');
       }
-    }
+      await ActivityService.recordActivity(userId: userId);
+      await AnalyticsService.instance.logExpenseAdded();
+    }());
     _resetForm();
+    return true;
   }
 
-  Future<void> editExpense(BuildContext context) async {
-    if (!formKey.currentState!.validate() || _editingExpenseId == null) return;
+  Future<bool> editExpense(BuildContext context) async {
+    if (MemberSessionService.instance.isSubUser &&
+        !MemberSessionService.instance.canUpdate(TeamPermissions.expenses)) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('لا تملك صلاحية تعديل المصروفات.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return false;
+    }
+
+    if (!formKey.currentState!.validate() || _editingExpenseId == null) return false;
 
     final index = expenses.indexWhere((e) => e['id'] == _editingExpenseId);
-    if (index == -1) return;
+    if (index == -1) return false;
+
+    final existing = expenses[index];
+    final actor = MemberSessionService.instance.actor;
 
     Map<String, dynamic> updatedData = {
       'id': _editingExpenseId,
@@ -127,27 +186,41 @@ class ExpenseController extends ChangeNotifier {
       'date': date.toIso8601String(),
       'synced': 0,
       'createdAt': expenses[index]['createdAt'],
+      'createdByLabel': existing['createdByLabel'],
+      'createdByRole': existing['createdByRole'],
+      'createdByUid': existing['createdByUid'],
+      'lastModifiedByLabel': actor.label,
+      'lastModifiedByRole': actor.role,
+      'lastModifiedByUid': actor.uid,
     };
 
     expenses[index] = updatedData;
     await _model.saveExpensesToFile(expenses);
     notifyListeners();
 
-    final hasInternet = await _model.hasInternet();
-    if (hasInternet) {
-      try {
-        await _model.saveExpenseToFirestore(updatedData, true);
-        expenses[index]['synced'] = 1;
-        await _model.saveExpensesToFile(expenses);
-        notifyListeners();
-      } catch (e) {
-        print('فشل تحديث المصروف: $e');
+    unawaited(() async {
+      final hasInternet = await _model.hasInternet();
+      if (hasInternet) {
+        try {
+          await _model.saveExpenseToFirestore(updatedData, true);
+          expenses[index]['synced'] = 1;
+          await _model.saveExpensesToFile(expenses);
+          notifyListeners();
+        } catch (e) {
+          print('فشل تحديث المصروف: $e');
+        }
       }
-    }
+    }());
     _resetForm();
+    return true;
   }
 
   Future<void> deleteExpense(String expenseId) async {
+    if (MemberSessionService.instance.isSubUser &&
+        !MemberSessionService.instance.canDelete(TeamPermissions.expenses)) {
+      return;
+    }
+
     expenses.removeWhere((e) => e['id'] == expenseId);
     await _model.saveExpensesToFile(expenses);
     notifyListeners();

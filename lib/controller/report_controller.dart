@@ -1,6 +1,8 @@
+// ignore_for_file: avoid_print
 // lib/controllers/report_controller.dart
 import 'dart:async';
 import 'package:fkra/model/report_model.dart';
+import 'package:fkra/services/analytics_service.dart';
 import 'package:flutter/material.dart';
 
 class ReportController extends ChangeNotifier {
@@ -64,6 +66,7 @@ class ReportController extends ChangeNotifier {
       _updateStatsFromLocalData();
       _calculateMonthlyStats();
       _calculateTodayPerformance();
+      await AnalyticsService.instance.logReportGenerated(type: 'general');
 
       // تحميل البيانات المخزنة مؤقتاً إذا لم توجد محلية
       if (totalExpenses == 0 && totalRevenues == 0) {

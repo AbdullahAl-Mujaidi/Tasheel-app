@@ -1,117 +1,61 @@
 // lib/models/account_model.dart
-import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
+// ملاحظة معمارية: هذا الملف أصبح واجهة تخويل (Facade) رفيعة لدعم التوافق
+// العكسي مع المتصلين القائمين (account_controller / SplashScreen).
+//
+// التنفيذ الفعلي انتقل إلى features/account/data:
+//   - AccountRemoteDataSource (FirebaseAuth + users/{uid})
+//   - AccountLocalDataSource  (SharedPreferences: pending_accounts)
+//   - AccountRepositoryImpl   (تنسيق مزامنة الحسابات المعلقة)
+//   - AccountRepository       (العقد في domain)
+//
+// كل استدعاء هنا مجرد تمرير — لا يوجد أي منطق Firebase/SharedPreferences هنا.
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:fkra/core/network/connectivity_service.dart';
+import 'package:fkra/features/account/data/repositories/account_repository_impl.dart';
+import 'package:fkra/features/account/domain/repositories/account_repository.dart';
+import 'package:fkra/model/login_model.dart';
 
 class AccountModel {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final AccountRepository _repo = AccountRepositoryImpl();
 
   // التحقق من وجود اتصال بالإنترنت
-  Future<bool> hasInternet() async {
-    try {
-      final result = await InternetAddress.lookup('google.com')
-          .timeout(Duration(seconds: 5));
-      return result.isNotEmpty && result[0].rawAddress.isNotEmpty;
-    } catch (_) {
-      return false;
-    }
-  }
+  Future<bool> hasInternet() => ConnectivityService.hasInternet();
 
   // حفظ البيانات محلياً عند عدم وجود إنترنت
-  Future<void> saveAccountLocally(Map<String, dynamic> userData) async {
-    final prefs = await SharedPreferences.getInstance();
-    List<String> pendingAccounts = prefs.getStringList('pending_accounts') ?? [];
-
-    Map<String, dynamic> pendingData = {
-      'userData': userData,
-      'timestamp': DateTime.now().toIso8601String(),
-      'email': userData['email'],
-      'fullName': userData['fullName'],
-    };
-
-    pendingAccounts.add(jsonEncode(pendingData));
-    await prefs.setStringList('pending_accounts', pendingAccounts);
-  }
+  Future<void> saveAccountLocally(Map<String, dynamic> userData) =>
+      _repo.saveAccountLocally(userData);
 
   // مزامنة الحسابات المعلقة (تستدعى عند توفر الإنترنت)
-  Future<int> syncPendingAccounts() async {
-    final prefs = await SharedPreferences.getInstance();
-    final pendingAccounts = prefs.getStringList('pending_accounts') ?? [];
-    if (pendingAccounts.isEmpty) return 0;
-
-    List<String> syncedAccounts = [];
-    List<String> failedAccounts = [];
-
-    for (String accountJson in pendingAccounts) {
-      try {
-        Map<String, dynamic> account = jsonDecode(accountJson);
-        Map<String, dynamic> userData = account['userData'];
-
-        UserCredential userCredential = await _auth.createUserWithEmailAndPassword(
-          email: userData['email'],
-          password: userData['password'],
-        );
-
-        final String userId = userCredential.user!.uid;
-        await userCredential.user?.updateDisplayName(userData['fullName']);
-
-        Map<String, dynamic> firestoreData = {
-          'userId': userId,
-          'fullName': userData['fullName'],
-          'businessName': userData['businessName'],
-          'phoneNumber': userData['phoneNumber'],
-          'email': userData['email'],
-          'createdAt': FieldValue.serverTimestamp(),
-          'updatedAt': FieldValue.serverTimestamp(),
-        };
-        await _firestore.collection('users').doc(userId).set(firestoreData);
-
-        syncedAccounts.add(accountJson);
-      } catch (e) {
-        failedAccounts.add(accountJson);
-      }
-    }
-
-    // تحديث القائمة المعلقة
-    await prefs.setStringList('pending_accounts', failedAccounts);
-    return syncedAccounts.length;
-  }
+  Future<int> syncPendingAccounts() => _repo.syncPendingAccounts();
 
   // إنشاء حساب جديد في Firebase
   Future<UserCredential> createAccountWithEmailPassword({
     required String email,
     required String password,
-  }) async {
-    return await _auth.createUserWithEmailAndPassword(
-      email: email,
-      password: password,
-    );
-  }
+  }) =>
+      _repo.createAccountWithEmailPassword(email: email, password: password);
 
   // حفظ بيانات المستخدم في Firestore
   Future<void> saveUserDataToFirestore({
     required String userId,
     required Map<String, dynamic> userData,
-  }) async {
-    Map<String, dynamic> firestoreData = {
-      'userId': userId,
-      'fullName': userData['fullName'],
-      'businessName': userData['businessName'],
-      'phoneNumber': userData['phoneNumber'],
-      'email': userData['email'],
-      'createdAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    };
-    await _firestore.collection('users').doc(userId).set(firestoreData);
-  }
+  }) =>
+      _repo.saveUserDataToFirestore(userId: userId, userData: userData);
 
   // تحميل قائمة الحسابات المعلقة (للاستخدام في التحقق)
-  Future<List<String>> getPendingAccounts() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getStringList('pending_accounts') ?? [];
+  Future<List<String>> getPendingAccounts() => _repo.getPendingAccounts();
+
+  // ========== إرسال رسالة التحقق من البريد ==========
+  Future<void> sendEmailVerification() => _repo.sendEmailVerification();
+
+  // ========== تفكيك استثناءات Firebase Auth لعرض الرسالة الصحيحة ==========
+  String? errorCodeOf(Object error) => _repo.errorCodeOf(error);
+
+  String? errorMessageOf(Object error) => _repo.errorMessageOf(error);
+
+  // ========== تسجيل الخروج ==========
+  Future<void> signOut() async {
+    await LoginModel.signOutPlatform();
+    await LoginModel.clearSessionPrefs();
   }
 }

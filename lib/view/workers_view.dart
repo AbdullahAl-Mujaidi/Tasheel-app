@@ -1,5 +1,10 @@
 // lib/views/workers_view.dart
 import 'package:fkra/controller/workers_controller.dart';
+import 'package:fkra/model/team_member_model.dart';
+import 'package:fkra/services/member_session_service.dart';
+import 'package:fkra/view/worker_details_view.dart';
+import 'package:fkra/view/worker_reports_view.dart';
+import 'package:fkra/view/widgets/delegated_accounts_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:awesome_dialog/awesome_dialog.dart';
 import 'package:provider/provider.dart';
@@ -7,6 +12,13 @@ import 'package:provider/provider.dart';
 class WorkersPage extends StatelessWidget {
   final String userId;
   const WorkersPage({super.key, required this.userId});
+
+  bool _canCreateWorker() =>
+      MemberSessionService.instance.canCreate(TeamPermissions.workers);
+  bool _canUpdateWorker() =>
+      MemberSessionService.instance.canUpdate(TeamPermissions.workers);
+  bool _canDeleteWorker() =>
+      MemberSessionService.instance.canDelete(TeamPermissions.workers);
 
   @override
   Widget build(BuildContext context) {
@@ -20,7 +32,7 @@ class WorkersPage extends StatelessWidget {
           if (controller.isLoading) {
             return Scaffold(
               appBar: AppBar(
-                title: Text("تساهيل", style: TextStyle(color: colorScheme.primary)),
+                title: Text("تسهيل", style: TextStyle(color: colorScheme.primary)),
                 centerTitle: true,
                 backgroundColor: colorScheme.surface,
               ),
@@ -41,7 +53,7 @@ class WorkersPage extends StatelessWidget {
           return Scaffold(
             appBar: AppBar(
               title: Text(
-                "تساهيل",
+                "تسهيل",
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   color: colorScheme.primary,
@@ -51,6 +63,25 @@ class WorkersPage extends StatelessWidget {
               centerTitle: true,
               backgroundColor: colorScheme.surface,
               elevation: 0,
+              leadingWidth: 100,
+              leading: TextButton(
+                onPressed: () {
+                  DelegatedAccountsDialog.show(context, onAccountSwitched: () {
+                    controller.syncNow();
+                  });
+                },
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.supervisor_account_rounded, size: 18, color: colorScheme.primary),
+                    const SizedBox(width: 2),
+                    Text(
+                      'المفوضين',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: colorScheme.primary),
+                    ),
+                  ],
+                ),
+              ),
               actions: [
                 IconButton(
                   onPressed: controller.isOffline
@@ -88,7 +119,7 @@ class WorkersPage extends StatelessWidget {
                       child: Container(
                         padding: EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                         decoration: BoxDecoration(
-                          color: Colors.orange.withOpacity(0.2),
+                          color: Colors.orange.withValues(alpha: 0.2),
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Row(
@@ -113,9 +144,9 @@ class WorkersPage extends StatelessWidget {
                     margin: EdgeInsets.all(10),
                     padding: EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.orange.withOpacity(0.1),
+                      color: Colors.orange.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                      border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
                     ),
                     child: Row(
                       children: [
@@ -136,7 +167,8 @@ class WorkersPage extends StatelessWidget {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      ElevatedButton.icon(
+                      if (_canCreateWorker())
+                        ElevatedButton.icon(
                         onPressed: () {
                           controller.resetForm();
                           _showAddEditWorkerBottomSheet(context, controller, colorScheme);
@@ -157,6 +189,29 @@ class WorkersPage extends StatelessWidget {
                         ),
                       ),
                     ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => WorkerReportsView(
+                            workers: controller.workers,
+                          ),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.table_view, size: 18),
+                    label: const Text(
+                      'تقارير العمال',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: colorScheme.primary,
+                      minimumSize: const Size.fromHeight(46),
+                    ),
                   ),
                 ),
                 Padding(
@@ -205,7 +260,7 @@ class WorkersPage extends StatelessWidget {
                           Container(
                             padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(
-                              color: Colors.orange.withOpacity(0.2),
+                              color: Colors.orange.withValues(alpha: 0.2),
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Text(
@@ -259,6 +314,29 @@ class WorkersPage extends StatelessWidget {
     );
   }
 
+  // ========== حوار مشاركة عامل واحد ==========
+  Future<void> _showShareWorkerDialog(
+    BuildContext context,
+    WorkersController controller,
+    Map<String, dynamic> worker,
+  ) async {
+    final result = await showDialog<({bool ok, String message})>(
+      context: context,
+      builder: (_) => _ShareWorkerDialog(
+        controller: controller,
+        worker: worker,
+      ),
+    );
+    if (result == null || !context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor:
+            result.ok ? null : Theme.of(context).colorScheme.error,
+        content: Text(result.message),
+      ),
+    );
+  }
+
   // ========== بطاقة العامل ==========
   Widget _buildWorkerCard(
     Map<String, dynamic> worker,
@@ -270,6 +348,8 @@ class WorkersPage extends StatelessWidget {
     String phone = worker['phone'] ?? 'بدون رقم';
     String specialization = worker['specialization'] ?? 'بدون تخصص';
     String salary = worker['salary']?.toString() ?? '0';
+    String wageType = worker['wageType'] ?? 'monthly';
+    String wageLabel = controller.wageTypeLabel(wageType);
     bool isSynced = worker['synced'] == 1;
     String displayDate = '';
     try {
@@ -284,9 +364,22 @@ class WorkersPage extends StatelessWidget {
       color: colorScheme.surface,
       elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Container(
-        padding: const EdgeInsets.all(10),
-        child: Column(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => WorkerDetailsView(
+                controller: controller,
+                workerId: worker['id'].toString(),
+              ),
+            ),
+          );
+        },
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          child: Column(
           children: [
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -298,48 +391,66 @@ class WorkersPage extends StatelessWidget {
                         margin: EdgeInsets.only(left: 8),
                         padding: EdgeInsets.all(4),
                         decoration: BoxDecoration(
-                          color: Colors.orange.withOpacity(0.2),
+                          color: Colors.orange.withValues(alpha: 0.2),
                           shape: BoxShape.circle,
                         ),
                         child: Icon(Icons.sync_problem, color: Colors.orange, size: 16),
                       ),
-                    IconButton(
-                      onPressed: () {
-                        controller.loadWorkerForEditing(worker);
-                        _showAddEditWorkerBottomSheet(context, controller, colorScheme);
-                      },
-                      icon: Icon(Icons.edit, color: colorScheme.primary),
-                      tooltip: 'تعديل العامل',
-                    ),
-                    IconButton(
-                      onPressed: () => _confirmDelete(context, worker['id'], name, controller),
-                      icon: Icon(Icons.delete, color: colorScheme.error),
-                      tooltip: 'حذف العامل',
-                    ),
+                    // مشاركة عامل واحد: للمالك فقط (لا تظهر لمستخدم مفوَّض).
+                    if (MemberSessionService.instance
+                        .isActiveOwnerOf(userId))
+                      IconButton(
+                        onPressed: () =>
+                            _showShareWorkerDialog(context, controller, worker),
+                        icon: Icon(Icons.ios_share, color: colorScheme.primary),
+                        tooltip: 'مشاركة العامل',
+                      ),
+                    if (_canUpdateWorker())
+                      IconButton(
+                        onPressed: () {
+                          controller.loadWorkerForEditing(worker);
+                          _showAddEditWorkerBottomSheet(context, controller, colorScheme);
+                        },
+                        icon: Icon(Icons.edit, color: colorScheme.primary),
+                        tooltip: 'تعديل العامل',
+                      ),
+                    if (_canDeleteWorker())
+                      IconButton(
+                        onPressed: () => _confirmDelete(context, worker['id'], name, controller),
+                        icon: Icon(Icons.delete, color: colorScheme.error),
+                        tooltip: 'حذف العامل',
+                      ),
                   ],
                 ),
-                Row(
-                  children: [
-                    Text(
-                      name,
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: colorScheme.onSurface,
+                Flexible(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: colorScheme.onSurface,
+                          ),
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      width: 50,
-                      height: 50,
-                      decoration: BoxDecoration(
-                        color: colorScheme.primary.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(10),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        width: 50,
+                        height: 50,
+                        decoration: BoxDecoration(
+                          color: colorScheme.primary.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Icon(Icons.person, color: colorScheme.primary),
                       ),
-                      child: Icon(Icons.person, color: colorScheme.primary),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -348,13 +459,29 @@ class WorkersPage extends StatelessWidget {
             const SizedBox(height: 10),
             _buildInfoRow(Icons.phone, phone, color: colorScheme.primary, colorScheme: colorScheme),
             const SizedBox(height: 10),
-            _buildInfoRow(Icons.attach_money, "$salary ريال/شهر", color: Colors.green, colorScheme: colorScheme),
+            _buildInfoRow(Icons.attach_money, "$salary ريال/$wageLabel", color: Colors.green, colorScheme: colorScheme),
             const SizedBox(height: 10),
             _buildInfoRow(Icons.hotel_class, specialization, color: Colors.deepOrange, colorScheme: colorScheme),
             const SizedBox(height: 10),
             _buildInfoRow(Icons.punch_clock, displayDate, color: Colors.indigo, colorScheme: colorScheme),
+            const SizedBox(height: 10),
+            if ((worker['createdByLabel'] ?? '').toString().isNotEmpty)
+              _buildInfoRow(
+                Icons.person_add_alt_1,
+                'أضيف بواسطة: ${worker['createdByLabel']}',
+                color: colorScheme.primary,
+                colorScheme: colorScheme,
+              ),
+            if ((worker['lastModifiedByLabel'] ?? '').toString().isNotEmpty)
+              _buildInfoRow(
+                Icons.edit,
+                'آخر تعديل: ${worker['lastModifiedByLabel']}',
+                color: Colors.orange,
+                colorScheme: colorScheme,
+              ),
           ],
         ),
+      ),
       ),
     );
   }
@@ -398,10 +525,11 @@ class WorkersPage extends StatelessWidget {
               key: controller.formKey,
               child: Container(
                 padding: const EdgeInsets.all(15),
-                width: double.infinity,
-                height: 600,
-                child: SingleChildScrollView(
-                  child: Column(
+width: double.infinity,
+                  child: SingleChildScrollView(
+                    padding: EdgeInsets.only(
+                        bottom: MediaQuery.of(context).viewInsets.bottom),
+                    child: Column(
                     children: [
                       Text(
                         controller.isEditing ? "تعديل عامل" : "إضافة عامل",
@@ -418,7 +546,7 @@ class WorkersPage extends StatelessWidget {
                           child: Container(
                             padding: EdgeInsets.all(8),
                             decoration: BoxDecoration(
-                              color: Colors.orange.withOpacity(0.1),
+                              color: Colors.orange.withValues(alpha: 0.1),
                               borderRadius: BorderRadius.circular(8),
                             ),
                             child: Row(
@@ -462,13 +590,93 @@ class WorkersPage extends StatelessWidget {
                         colorScheme,
                       ),
                       const SizedBox(height: 20),
-                      _buildTextField(
-                        "الراتب",
-                        "0.0",
-                        controller.salaryController,
-                        (value) => _validateSalary(value),
-                        colorScheme,
-                        keyboardType: TextInputType.number,
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Expanded(
+                            flex: 3,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Align(
+                                  alignment: Alignment.centerRight,
+                                  child: Text("الراتب",
+                                      style: TextStyle(fontSize: 17, color: colorScheme.onSurface)),
+                                ),
+                                SizedBox(height: 8),
+                                TextFormField(
+                                  controller: controller.salaryController,
+                                  validator: (value) => _validateSalary(value),
+                                  autovalidateMode: AutovalidateMode.onUserInteraction,
+                                  textAlign: TextAlign.right,
+                                  keyboardType: TextInputType.number,
+                                  style: TextStyle(color: colorScheme.onSurface),
+                                  decoration: InputDecoration(
+                                    filled: true,
+                                    hintText: "0.0",
+                                    hintStyle: TextStyle(color: colorScheme.onSurfaceVariant),
+                                    fillColor: colorScheme.surface,
+                                    border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                        borderSide: BorderSide(color: colorScheme.outline)),
+                                    enabledBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                        borderSide: BorderSide(color: colorScheme.outline)),
+                                    focusedBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                        borderSide: BorderSide(color: colorScheme.primary, width: 2)),
+                                    errorBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                        borderSide: BorderSide(color: colorScheme.error)),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          SizedBox(width: 8),
+                          Expanded(
+                            flex: 2,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Align(
+                                  alignment: Alignment.centerRight,
+                                  child: Text("طريقة الأجر",
+                                      style: TextStyle(fontSize: 17, color: colorScheme.onSurface)),
+                                ),
+                                SizedBox(height: 8),
+                                DropdownButtonFormField<String>(
+                                  initialValue: controller.wageType,
+                                  items: [
+                                    DropdownMenuItem(value: 'monthly', child: Text('شهري')),
+                                    DropdownMenuItem(value: 'weekly', child: Text('أسبوعي')),
+                                    DropdownMenuItem(value: 'daily', child: Text('يومي')),
+                                    DropdownMenuItem(value: 'halfDay', child: Text('نصف يوم')),
+                                    DropdownMenuItem(value: 'hourly', child: Text('بالساعة')),
+                                  ],
+                                  onChanged: (val) {
+                                    if (val != null) {
+                                      setStateBottomSheet(() => controller.setWageType(val));
+                                    }
+                                  },
+                                  decoration: InputDecoration(
+                                    filled: true,
+                                    fillColor: colorScheme.surface,
+                                    border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                        borderSide: BorderSide(color: colorScheme.outline)),
+                                    enabledBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                        borderSide: BorderSide(color: colorScheme.outline)),
+                                    focusedBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                        borderSide: BorderSide(color: colorScheme.primary, width: 2)),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
                       SizedBox(height: 20),
                       _buildDateField(context, controller, colorScheme, setStateBottomSheet),
@@ -489,12 +697,36 @@ class WorkersPage extends StatelessWidget {
                           const SizedBox(width: 15),
                           ElevatedButton(
                             onPressed: () async {
+                              final messenger = ScaffoldMessenger.of(context);
                               if (controller.isEditing) {
-                                await controller.editWorker(context);
+                                final bool ok =
+                                    await controller.editWorker(context);
+                                if (ok && context.mounted) {
+                                  Navigator.pop(context);
+                                  messenger.showSnackBar(
+                                    SnackBar(
+                                      content: Text(controller.isOffline
+                                          ? 'تم تعديل العامل محلياً وسيتم مزامنته تلقائياً عند عودة الاتصال'
+                                          : 'تم تعديل العامل بنجاح'),
+                                      backgroundColor: Colors.green,
+                                    ),
+                                  );
+                                }
                               } else {
-                                await controller.addWorker(context);
+                                final bool ok =
+                                    await controller.addWorker(context);
+                                if (ok && context.mounted) {
+                                  Navigator.pop(context);
+                                  messenger.showSnackBar(
+                                    SnackBar(
+                                      content: Text(controller.isOffline
+                                          ? 'تم حفظ العامل محلياً وسيتم مزامنته تلقائياً عند عودة الاتصال'
+                                          : 'تم إضافة العامل بنجاح'),
+                                      backgroundColor: Colors.green,
+                                    ),
+                                  );
+                                }
                               }
-                              if (context.mounted) Navigator.pop(context);
                             },
                             style: ElevatedButton.styleFrom(
                               backgroundColor: colorScheme.primary,
@@ -657,8 +889,9 @@ class WorkersPage extends StatelessWidget {
 
   String? _validatePhone(String? value) {
     if (value == null || value.isEmpty) return 'الرجاء إدخال رقم الهاتف';
-    if (!RegExp(r'^\d{9}$').hasMatch(value))
+    if (!RegExp(r'^\d{9}$').hasMatch(value)) {
       return 'الرجاء إدخال رقم هاتف صالح (9 أرقام)';
+    }
     return null;
   }
 
@@ -672,5 +905,131 @@ class WorkersPage extends StatelessWidget {
     if (value == null || value.isEmpty) return 'الرجاء إدخال راتب العامل';
     if (double.tryParse(value) == null) return 'الرجاء إدخال رقم صالح للراتب';
     return null;
+  }
+}
+
+// حوار مشاركة عامل واحد. الحالة تملك المتحكمات وترتيبها فيدمر عند إزالة
+// الحوار نهائياً من الشجرة (بعد انتهاء حركة الخروج) — لا تتحرر مبكراً فتُقرأ
+// حقول النموذج أثناء إغلاق الحوار وتتسبب في "controller used after disposed".
+class _ShareWorkerDialog extends StatefulWidget {
+  final WorkersController controller;
+  final Map<String, dynamic> worker;
+
+  const _ShareWorkerDialog({required this.controller, required this.worker});
+
+  @override
+  State<_ShareWorkerDialog> createState() => _ShareWorkerDialogState();
+}
+
+class _ShareWorkerDialogState extends State<_ShareWorkerDialog> {
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+  bool _isSharing = false;
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _emailController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _isSharing = true);
+    ({bool ok, String message}) result;
+    try {
+      final message = await widget.controller.shareWorker(
+        widget.worker['id'].toString(),
+        _nameController.text.trim(),
+        _emailController.text.trim(),
+      );
+      result = (ok: true, message: message);
+    } catch (e) {
+      result = (ok: false, message: e.toString());
+    }
+    if (!mounted) return;
+    Navigator.of(context).pop(result);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: AlertDialog(
+        title: const Text('مشاركة العامل'),
+        content: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'شارك هذا العامل مع مستخدم تابع: يحصل على عرض وتعديل '
+                  'على هذا العامل فقط (لا يرى باقي عمالك).',
+                  style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                ),
+                const SizedBox(height: 14),
+                TextFormField(
+                  controller: _nameController,
+                  textAlign: TextAlign.right,
+                  decoration: const InputDecoration(
+                    labelText: 'الاسم',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (v) {
+                    if (v == null || v.trim().length < 3) {
+                      return 'أدخل اسم المستخدم (3 أحرف على الأقل)';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _emailController,
+                  textAlign: TextAlign.right,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: const InputDecoration(
+                    labelText: 'البريد الإلكتروني',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (v) {
+                    final value = v?.trim() ?? '';
+                    if (!RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]{2,}$')
+                        .hasMatch(value)) {
+                      return 'أدخل بريداً إلكترونياً صحيحاً';
+                    }
+                    return null;
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: _isSharing
+                ? null
+                : () {
+                    // إخفاء لوحة المفاتيح قبل انتظار الشبكة كي لا يتهاتف إغلاق
+                    // لوحة المفاتيح مع حوار الإغلاق (واقي من خطأ Flutter المعروف).
+                    FocusScope.of(context).unfocus();
+                    _submit();
+                  },
+            child: _isSharing
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text('مشاركة'),
+          ),
+        ],
+      ),
+    );
   }
 }

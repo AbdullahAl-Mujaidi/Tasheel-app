@@ -1,0 +1,432 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===================== دوال مساعدة =====================
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // الصلاحيات تأتي من Custom Claims الموثوقة (تُنصب عبر Admin SDK فقط)
+    // أو من الحقل userType في وثيقة المستخدم (يُفعَّل من قاعدة البيانات).
+    // ملاحظة: لا يسمح للمستخدم بتغيير userType الخاص به من التطبيق.
+    function getUserType(uid) {
+      return exists(/databases/$(database)/documents/users/$(uid))
+        ? get(/databases/$(database)/documents/users/$(uid)).data.get('userType', 'user')
+        : 'user';
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && (
+        (request.auth.token.keys().hasAll(['email']) && request.auth.token.email == 'abdullahalmjudi@gmail.com') ||
+        (request.auth.token.keys().hasAll(['role']) && request.auth.token.role == 'super_admin') ||
+        getUserType(request.auth.uid) == 'super_admin'
+      );
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        (request.auth.token.keys().hasAll(['email']) && request.auth.token.email == 'abdullahalmjudi@gmail.com') ||
+        (request.auth.token.keys().hasAll(['role']) && (request.auth.token.role == 'super_admin' || request.auth.token.role == 'admin')) ||
+        getUserType(request.auth.uid) == 'super_admin' ||
+        getUserType(request.auth.uid) == 'admin'
+      );
+    }
+
+    function isAnalyst() {
+      return isSignedIn() && (
+        (request.auth.token.keys().hasAll(['role']) && request.auth.token.role == 'analyst') ||
+        getUserType(request.auth.uid) == 'analyst'
+      );
+    }
+
+    function isAnyAdminRole() {
+      return isSignedIn() && (
+        (request.auth.token.keys().hasAll(['email']) && request.auth.token.email == 'abdullahalmjudi@gmail.com') ||
+        (request.auth.token.keys().hasAll(['role']) && (request.auth.token.role == 'super_admin' || request.auth.token.role == 'admin' || request.auth.token.role == 'analyst')) ||
+        getUserType(request.auth.uid) == 'super_admin' ||
+        getUserType(request.auth.uid) == 'admin' ||
+        getUserType(request.auth.uid) == 'analyst'
+      );
+    }
+
+    // ===================== المستخدمون التابعون (Sub-Users) =====================
+    // وثيقة العضوية: users/{ownerUid}/team_members/{memberUid}
+    // المستخدم التابع:
+    //  - لا يستطيع تعديل ownerUid / permissions / status / role (الكتابة على
+    //    وثيقة عضويته ممنوعة إلا لإسقاط mustChangePassword فقط).
+    //  - يقرأ بيانات المالك حسب الصلاحية (module/action) فقط.
+    //  - علاقته بالمخزن دائماً عبر request.auth.uid فلا يمكن تزويرها.
+    function memberDocActive(ownerUid) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(ownerUid)/team_members/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(ownerUid)/team_members/$(request.auth.uid)).data.status == 'active';
+    }
+
+    // ===================== دعوة التفويض لحساب مسجّل مسبقاً =====================
+    // حين يكون بريد العضو مسجّلاً مسبقاً بحساب خاص به، يكتب المالك دعوة بدل
+    // إنشاء حساب مكرر. مفتاح الدعوة = "المالك_البريد" لا البريد فقط — حتى لا
+    // تستبدل دعوة مالكٍ ثانٍ لنفس البريد دعوةَ المالك الأول قبل تفعيلها.
+    // يُفَعِّل العضو دعواتِه كلَّها بنفسه عند أول دخول بحسابه (يعرف UID نفسه
+    // لحظه التسجيل — ما لا يستطيع العميل كشفه سلفاً).
+    // تحقق الدعوة بمعرّف وثيقتها الحقيقي (الذي جلبه العميل بنفسه عبر الاستعلام
+    // عن بريده) — لا يُعاد بناء المسار من ownerUid + البريد، لأن صيغة مفتاح
+    // الدعوة التاريخية متغيرة والقواعد لا تقدر على استعلامات مجموعات.
+    // ملاحظة حرجة: exists/get تقبل نوع path لا string — نستخدم مساراً حرفياً
+    // فيه إقحام $(...) فيكون المصطلح نفسه من نوع path.
+    function memberInviteActiveById(ownerUid, inviteId) {
+      return isSignedIn()
+        && inviteId != ''
+        && inviteId is string
+        && request.auth.token.keys().hasAll(['email'])
+        && exists(/databases/$(database)/documents/member_invites/$(inviteId))
+        && get(/databases/$(database)/documents/member_invites/$(inviteId))
+               .data.get('ownerUid', '') == ownerUid
+        && get(/databases/$(database)/documents/member_invites/$(inviteId))
+               .data.get('email', '') == request.auth.token.email
+        && get(/databases/$(database)/documents/member_invites/$(inviteId))
+               .data.get('status', '') == 'active';
+    }
+
+    // مسار احتياطي سابق (للتوافق مع البناءات القديمة) أُزيل: بناء مفتاح
+    // ownerUid_email وإقحامه في مقطع واحد غير مدعوم في لغة القواعد ولا حاجة
+    // إليه — memberInviteActiveById يستخدم معرّف الوثيقة الحقيقي الذي يجلبه
+    // العميل من استعلام بريده، فيعمل مع كل صيغ مفاتيح الدعوات التاريخية.
+
+    // صلاحية على مستوى عملية: memberCan(ownerUid, 'businesses', 'read').
+    // تُلغى تلقائياً إذا تغيّرت الصلاحيات أو عُطّل العضو أو حُذفت وثيقته.
+    function memberCan(ownerUid, module, action) {
+      return memberDocActive(ownerUid)
+        && get(/databases/$(database)/documents/users/$(ownerUid)/team_members/$(request.auth.uid)).data.permissions[module] != null
+        && get(/databases/$(database)/documents/users/$(ownerUid)/team_members/$(request.auth.uid)).data.permissions[module][action] == true;
+    }
+
+    // صلاحية على مستوى السجل: memberScoped(ownerUid, module, action, docId).
+    // التفويض الكامل (غياب حقل scopedIds أو قائمة فارغة) يساوي memberCan.
+    // التفويض المقيّد يسمح فقط بالعناصر المدرجة، ويُربط بـ docId في القواعد
+    // المتداخلة تحت businesses/{docId} (ويتطابق مع fetch عبر where in).
+    function memberScoped(ownerUid, module, action, docId) {
+      return memberCan(ownerUid, module, action)
+        && (
+          !get(/databases/$(database)/documents/users/$(ownerUid)/team_members/$(request.auth.uid)).data.keys().hasAny(['scopedIds'])
+          || get(/databases/$(database)/documents/users/$(ownerUid)/team_members/$(request.auth.uid)).data.scopedIds[module] == null
+          || get(/databases/$(database)/documents/users/$(ownerUid)/team_members/$(request.auth.uid)).data.scopedIds[module].size() == 0
+          || get(/databases/$(database)/documents/users/$(ownerUid)/team_members/$(request.auth.uid)).data.scopedIds[module].hasAny([docId])
+        );
+    }
+
+    function canCreateBusiness(ownerUid) {
+      return memberCan(ownerUid, 'businesses', 'create');
+    }
+    function canDeleteBusiness(ownerUid) {
+      return memberCan(ownerUid, 'businesses', 'delete');
+    }
+
+    // ===================== بيانات المستخدم =====================
+    // الحقول التي يحق للمالك تحديثها بنفسه فقط (قائمة بيضاء صريحة).
+    // يُمنع المالك نهائيًا من تغيير: userType / status / createdAt / updatedAt
+    // وذلك لضمان أن الإيقاف (status) والترقية (userType) لا يمكن تزويرها من
+    // العميل حتى لو عُدِّل التطبيق — تُنفَّذ حصريًا عبر Cloud Functions / Admin Panel.
+    // استثناء آمن واحد: أثناء مسار المزامنة بعد التسجيل دون اتصال يُعاد إنشاء
+    // الوثيقة بحقولها كاملة بشرط أن يبقى userType == 'user' (لا ترقية للنفس).
+    function ownerWritableKeys() {
+      return ['userId', 'fullName', 'businessName', 'phoneNumber', 'email',
+              'photoURL', 'appVersion', 'lastLoginAt', 'lastActivityAt',
+              'lastSyncAt', 'lastLoginMethod', 'createdAt', 'updatedAt',
+              'userType'];
+    }
+
+    // الحقول الحساسة للصلاحيات: محظورة على كل المستخدمين ما عدا Super Admin
+    // (يُفحص عبر affectedKeys() في قاعدة update) — تمنع أي مستخدم أو مالك من
+    // تعديل صلاحياته بنفسه.
+    function privilegeKeysTouched() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasAny(['userType', 'role', 'roleChangeAuthorizedBy']);
+    }
+
+    // مدير النظام فقط يملك تعديل حقول الصلاحيات. المدير العادي يستطيع
+    // تحديث بيانات التشغيل المسموحة فقط، دون أي حقل غير مصرح به.
+    function adminWritableKeys() {
+      return ['fullName', 'businessName', 'phoneNumber', 'email', 'photoURL',
+              'appVersion', 'lastLoginAt', 'lastActivityAt', 'lastSyncAt',
+              'lastLoginMethod', 'status', 'updatedAt'];
+    }
+
+    match /users/{userId} {
+      // القراءة المفردة: المالك لملفه الشخصي فقط، أو مدير معتمد (لوحة الإدارة).
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin()
+        || (isSignedIn() && resource.data.uid != null
+            && resource.data.ownerUid == request.auth.uid);
+      // الإنشاء الأولي للبروفايل: فقط بحقل userType 'user' (لا تسجيل كمدير).
+      // أو تفعيل دعوة تفويض عبر حساب العضو المسجّل مسبقاً (userType 'sub_user').
+      // أو إنشاء حساب تابع جديد عبر بديل Cloud Functions (المالك ينشئ وثيقة
+      // المستخدم لحسابه الفرعي الجديد الذي أنشأه للتو).
+      allow create: if isOwner(userId)
+        && request.resource.data.get('userType', 'user') == 'user'
+        || (request.auth.uid == userId
+            && request.resource.data.get('userType', 'user') == 'sub_user'
+            && request.resource.data.get('ownerUid', '') != ''
+            && memberInviteActiveById(
+                  request.resource.data.get('ownerUid', ''),
+                  request.resource.data.get('inviteId', '')))
+        || (isSignedIn()
+            && request.resource.data.get('userType', 'user') == 'sub_user'
+            && request.resource.data.get('ownerUid', '') == request.auth.uid
+            && request.resource.data.get('uid', '') == userId
+            && request.auth.uid != userId);
+      allow update: if isSuperAdmin()
+        || (isAdmin()
+            && resource.data.get('userType', 'user') != 'super_admin'
+            && request.resource.data.get('userType', 'user') != 'super_admin'
+            && request.auth.uid != userId
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(adminWritableKeys())
+          && !privilegeKeysTouched())
+        // أي مدير (وليس المدير العام فقط) يستطيع ترقية مستخدم عادي إلى مدير
+        // مباشرة من قاعدة البيانات — بديل Cloud Functions على الخطة المجانية.
+        // قيود صارمة: لا ترقية للنفس، لا ترقية لمدير عام، الترقية إلى 'admin'
+        // فقط، ولا يُلمس سوى حقلي userType و updatedAt.
+        || (isAdmin()
+            && request.auth.uid != userId
+            && resource.data.get('userType', 'user') == 'user'
+            && request.resource.data.get('userType', 'user') == 'admin'
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['userType', 'updatedAt']))
+        || (isOwner(userId)
+            && request.resource.data.get('userType', 'user') == 'user'
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(ownerWritableKeys())
+            // حتى المالك لا يعدّل حقول الصلاحيات على ملفه الشخصي.
+            && !privilegeKeysTouched())
+        // تفعيل دعوة تفويض: العضو يسجّل خلفية المستخدم الثانوي (ownerUid/userType)
+        // على حسابِه الحالي دون صلاحية ترقية نفسه — مفتاح التحقق هو دعوته النشطة.
+        || (request.auth.uid == userId
+            && request.resource.data.get('userType', 'user') == 'sub_user'
+            && request.resource.data.get('ownerUid', '') != ''
+            && memberInviteActiveById(
+                  request.resource.data.get('ownerUid', ''),
+                  request.resource.data.get('inviteId', ''))
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['uid', 'ownerUid', 'userType', 'email', 'fullName',
+                           'photoURL', 'inviteId', 'updatedAt']));
+      // حذف وثيقة المستخدم يتم حصريًا عبر Cloud Function (Admin SDK)
+      // حتى لا يُحذف البروفايل من عميل معدَّل ويبقى مسار تحقق الحظر صحيحًا.
+      allow delete: if false;
+
+      // ============ الأعمال وحركاتها ============
+      // القراءة والتعديل يدعمان التفويض على مستوى السجل (memberScoped +
+      // docId)؛ الإنشاء والحذف للتفويض الكامل فقط (لا يُنشئ/يحذف المفوَّض
+      // على عمل واحد أعمالاً جديدة أو يحذف ما ليس مفوَّضاً له).
+      match /businesses/{docId} {
+        allow get, list: if isOwner(userId) || isAnyAdminRole() || memberScoped(userId, 'businesses', 'read', docId);
+        allow create: if isOwner(userId) || canCreateBusiness(userId);
+        allow update: if isOwner(userId) || memberScoped(userId, 'businesses', 'update', docId);
+        allow delete: if isOwner(userId) || canDeleteBusiness(userId);
+
+        // حركات العمل (دفعات/مصروفات) هي جزء من "تعديل العمل": من يملك
+        // إذن التعديل على عملٍ (كامل التفويض أو مقيّداً بعمل واحد) يسجّل
+        // ويمسح حركاته، دون أن يعني ذلك إنشاء/حذف العمل نفسه — الأول يبقى
+        // للتفويض الكامل (create/delete على الأعمال).
+        match /transactions/{txId} {
+          allow get, list: if isOwner(userId) || isAnyAdminRole() || memberScoped(userId, 'businesses', 'read', docId);
+          allow create: if isOwner(userId) || memberScoped(userId, 'businesses', 'update', docId);
+          allow update: if isOwner(userId) || memberScoped(userId, 'businesses', 'update', docId);
+          allow delete: if isOwner(userId) || memberScoped(userId, 'businesses', 'update', docId);
+        }
+      }
+
+      // ============ العمال ============
+      // القراءة والتعديل يدعمان التفويض على مستوى السجل (memberScoped +
+      // docId)؛ الإنشاء والحذف للتفويض الكامل فقط (لا يُنشئ/يحذف المفوَّض
+      // على عامل واحد عمالاً جديدة أو يحذف ما ليس مفوَّضاً له).
+      match /workers/{docId} {
+        allow get, list: if isOwner(userId) || isAnyAdminRole() || memberScoped(userId, 'workers', 'read', docId);
+        allow create: if isOwner(userId) || memberCan(userId, 'workers', 'create');
+        allow update: if isOwner(userId) || memberScoped(userId, 'workers', 'update', docId);
+        allow delete: if isOwner(userId) || memberCan(userId, 'workers', 'delete');
+      }
+
+      // ============ المصروفات ============
+      match /expenses/{docId} {
+        allow get, list: if isOwner(userId) || isAnyAdminRole() || memberCan(userId, 'expenses', 'read');
+        allow create: if isOwner(userId) || memberCan(userId, 'expenses', 'create');
+        allow update: if isOwner(userId) || memberCan(userId, 'expenses', 'update');
+        allow delete: if isOwner(userId) || memberCan(userId, 'expenses', 'delete');
+      }
+
+      // ============ الحقول المخصصة للأعمال ============
+      // قراءة للمالك وللتابع الذي يملك صلاحية الأعمال أو الإعدادات (يعرضها
+      // ضمن نموذج العمل)، والكتابة ملكية المالك فقط.
+      match /custom_fields/{docId} {
+        allow get, list: if isOwner(userId)
+          || memberCan(userId, 'businesses', 'read')
+          || memberCan(userId, 'settings', 'read');
+        allow create, update, delete: if isOwner(userId);
+      }
+
+      // ============ إدارة المستخدمين التابعين ============
+      // المالك يدير وثائق التابعين بالكامل؛ والتابع يقرأ وثيقته فقط،
+      // ولا يحق له تعديل شيء فيها سوى إسقاط mustChangePassword بعد تغيير
+      // كلمة المرور المؤقتة (القيمة false فقط ولهذا الحقل وحده).
+      match /team_members/{memberUid} {
+        allow get: if isOwner(userId)
+          || (isSignedIn() && request.auth.uid == memberUid)
+          || isAdmin();
+        allow list: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId)
+          || (request.auth.uid == memberUid
+              && request.resource.data.get('uid', '') == request.auth.uid
+              && request.resource.data.get('ownerUid', '') == userId
+              && request.resource.data.get('status', '') == 'active'
+              && memberInviteActiveById(
+                    userId, request.resource.data.get('inviteId', '')));
+        allow delete: if isOwner(userId);
+        allow update: if isOwner(userId) || isAdmin()
+          || (isSignedIn() && request.auth.uid == memberUid
+              && resource.data.uid == memberUid
+              && request.resource.data.diff(resource.data).affectedKeys()
+                   .hasOnly(['mustChangePassword'])
+              && request.resource.data.mustChangePassword == false);
+      }
+
+      // جميع البيانات الفرعية الأخرى (أجهزة FCM وغيرها) تبقى للمالك فقط:
+      match /{document=**} {
+        allow read, write: if isOwner(userId);
+      }
+    }
+
+    // ===================== البحث عن عضوية (Collection Group) =====================
+    // بعد تسجيل الدخول يبحث التطبيق عن وثيقة عضوية المستخدم عبر collectionGroup
+    // لمعرفة صاحب الحساب. القاعدة تسمح فقط بقراءة وثيقة العضو نفسه
+    // (resource.data.uid == request.auth.uid) فلا يمكن تتبع مستخدمين آخرين.
+    match /{path=**}/team_members/{memberUid} {
+      allow get: if isSignedIn() && resource.data.uid == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    // ===================== السجل السريع للمستخدمين التابعين =====================
+   match /member_lookups/{memberUid} {
+  allow read, write: if isSignedIn()
+    && request.auth.uid == memberUid;
+}
+
+    // ===================== دعوات التفويض لحسابات مسجّلة مسبقاً =====================
+    // المالك يكتب دعوة بمفتاح "المالك_البريد" حين يريد تفويض حساب يملكه العضو
+    // فعلاً (لا يمكن إنشاء حساب مكرر، ولا يكشف العميل UID الحساب سلفاً). صاحب
+    // البريد نفسه يقرأ ويمسح دعوته عند دخوله (تُحذف فور التفعيل)، والتحقق
+    // الفعلي يجرى في قواعد users / team_members أعلاه عبر memberInviteActiveById
+    // بمعرّف وثيقة الدعوة الذي جلبه العميل من استعلام بريده (لا يُعاد بناؤه
+    // من ownerUid + البريد لأن صيغة مفتاح الدعوة التاريخية متغيرة).
+    // ملاحظة: لا تُتحقق صيغة المفتاح هنا (لا دوال نصوص في القواعد) — الأمان
+    // في التفعيل: فقط دعوةٌ وثيقتُها موجودة فعلاً، ownerUid لها يتطابق مع
+    // المالك، بريدها يتطابق مع بريد التوكن، وحالتها active — ولا يمكن
+    // لمستخدم تفعيل دعوة ليس mailُه هو أو توثيقه بمالكٍ آخر.
+    match /member_invites/{inviteId} {
+      allow create: if isSignedIn()
+        && request.resource.data.get('ownerUid', '') == request.auth.uid
+        && request.resource.data.get('email', '') is string
+        && request.resource.data.get('email', '') != '';
+      allow update: if isSignedIn()
+        && resource.data.get('ownerUid', '') == request.auth.uid
+        && request.resource.data.get('ownerUid', '') == request.auth.uid;
+      allow get: if isSignedIn()
+        && (request.auth.token.keys().hasAll(['email'])
+            && resource.data.get('email', '') == request.auth.token.email
+            || resource.data.get('ownerUid', '') == request.auth.uid);
+      allow delete: if isSignedIn()
+        && (request.auth.token.keys().hasAll(['email'])
+            && resource.data.get('email', '') == request.auth.token.email
+            || resource.data.get('ownerUid', '') == request.auth.uid);
+      // المالك يُدرج دعواته المعلّقة (عرض الإدارة)، وصاحب البريد يقرأ دعواته
+      // (التفعيل التلقائي عند أول دخول) — كلٌّ لحقلِه فقط.
+      allow list: if isSignedIn()
+        && (request.auth.token.keys().hasAll(['email'])
+            && resource.data.get('email', '') == request.auth.token.email
+            || resource.data.get('ownerUid', '') == request.auth.uid);
+    }
+
+    // ===================== الاستعلامات المجمّعة (Collection Groups) =====================
+    // تُستخدم فقط في لوحة المدير للتجميع عبر كل المستخدمين (عدد الأعمال والعمال).
+    // القراءة للمديرين فقط (مع بقاء الكتابة ملكية المالك عبر القواعد المتداخلة أعلاه).
+    match /{path=**}/businesses/{docId} {
+      allow read: if isAnyAdminRole();
+    }
+    match /{path=**}/workers/{docId} {
+      allow read: if isAnyAdminRole();
+    }
+
+    // ===================== حسابات المديرين =====================
+    // القراءة: أي مدير (لوحة الإدارة) أو صاحب الحساب.
+    // الكتابة الكاملة (إضافة/إزالة أي دور): Super Admin فقط.
+    // أي مدير عادي يستطيع إضافة/تحديث دور 'admin' فقط لسجلٍ آخر (وليس لنفسه)،
+    // ولا يمكنه تثبيت دور 'super_admin' أو التلاعب بسجل مدير عام محمي.
+    match /admin_users/{uid} {
+      allow read: if isAnyAdminRole()
+        || (isSignedIn() && request.auth.uid == uid);
+      allow create, update: if isSuperAdmin()
+        || (isAdmin()
+            && request.auth.uid != uid
+            && request.resource.data.get('role', '') == 'admin'
+            && request.resource.data.get('status', '') == 'active'
+            // لا نسمح لمدير عادي بتثبيت متانٍ لا يمكن التراجع عنه،
+            // ولا بالتلاعب بسجل محمي بدور مدير عام.
+            && !(
+                 exists(/databases/$(database)/documents/users/$(uid))
+                 && get(/databases/$(database)/documents/users/$(uid)).data
+                       .get('userType', 'user') == 'super_admin'
+               ));
+      allow delete: if isSuperAdmin();
+    }
+
+    // ===================== الإشعارات =====================
+    // المدير يكتب طلب الإرسال، والتنفيذ يتم عبر Cloud Function فقط.
+    match /notifications/{id} {
+      allow create: if isAdmin();
+      allow read: if isAdmin();
+      allow update, delete: if false;
+    }
+
+    // ===================== سجل العمليات (Audit Logs) =====================
+    // لا يمكن لأي عميل تعديل أو حذف السجلات إطلاقًا.
+    match /audit_logs/{id} {
+      allow create: if isAdmin();
+      allow read: if isAdmin();
+      allow update, delete: if false;
+    }
+
+    // ===================== إحصائيات لوحة المدير =====================
+    // تُكتب حصريًا بواسطة Cloud Functions (Admin SDK) ولا يقبل
+    // أي عميل الكتابة عليها لمنع التلاعب.
+    match /admin_stats/{docId} {
+      allow read: if isAnyAdminRole();
+      allow write: if false;
+    }
+    match /admin_stats/{section}/{uid} {
+      allow read: if isAnyAdminRole();
+      allow write: if false;
+    }
+
+    // ===================== استهلاك الفايربيس (قراءات، كتابات، حذف) =====================
+    // جدول الإحصائيات المسجل في قاعدة البيانات: يقرأه ويسجل فيه جميع المستخدمين الموثوقين والمديرين.
+    match /firebase_usage/{docId} {
+      allow read, create, update: if isSignedIn();
+    }
+    match /firebase_usage/{docId}/{subPath=**} {
+      allow read, create, update: if isSignedIn();
+    }
+
+    // ===================== إعدادات المنصة =====================
+    // قراءة مفردة لكل المستخدمين الموثقين (للتحقق من إصدار التطبيق لاحقاً)
+    // والكتابة لـ Super Admin فقط.
+    match /platform/{doc} {
+      allow get: if isSignedIn();
+      allow list: if isAdmin();
+      allow write: if isSuperAdmin();
+    }
+  }
+}

@@ -1,5 +1,6 @@
-// lib/views/home_view.dart
 import 'package:fkra/controller/home_controller.dart';
+import 'package:fkra/services/member_session_service.dart';
+import 'package:fkra/view/widgets/delegated_accounts_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -36,7 +37,7 @@ class HomePage extends StatelessWidget {
           return Scaffold(
             appBar: AppBar(
               title: Text(
-                "تساهيل",
+                "تسهيل",
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   color: colorScheme.primary,
@@ -46,6 +47,25 @@ class HomePage extends StatelessWidget {
               centerTitle: true,
               backgroundColor: colorScheme.surface,
               elevation: 0,
+              leadingWidth: 100,
+              leading: TextButton(
+                onPressed: () {
+                  DelegatedAccountsDialog.show(context, onAccountSwitched: () {
+                    controller.refreshData();
+                  });
+                },
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.supervisor_account_rounded, size: 18, color: colorScheme.primary),
+                    const SizedBox(width: 2),
+                    Text(
+                      'المفوضين',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: colorScheme.primary),
+                    ),
+                  ],
+                ),
+              ),
               actions: [
                 IconButton(
                   onPressed: () async {
@@ -71,7 +91,7 @@ class HomePage extends StatelessWidget {
                       child: Container(
                         padding: EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                         decoration: BoxDecoration(
-                          color: Colors.orange.withOpacity(0.2),
+                          color: Colors.orange.withValues(alpha: 0.2),
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Row(
@@ -95,14 +115,51 @@ class HomePage extends StatelessWidget {
                 physics: AlwaysScrollableScrollPhysics(),
                 child: Column(
                   children: [
+                    if (MemberSessionService.instance.isDelegatedActive)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.teal.shade800,
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4)],
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.store_rounded, color: Colors.white, size: 22),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'أنت تعمل كـ مفوض في حساب ${MemberSessionService.instance.activeDelegatedOwnerName}',
+                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                              ),
+                            ),
+                            InkWell(
+                              onTap: () async {
+                                await MemberSessionService.instance.switchToPersonal();
+                                controller.refreshData();
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: const Text('حسابي الشخصي', style: TextStyle(color: Colors.teal, fontSize: 11, fontWeight: FontWeight.bold)),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     if (controller.isOffline)
                       Container(
                         margin: EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                         padding: EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: Colors.orange.withOpacity(0.1),
+                          color: Colors.orange.withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                          border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
                         ),
                         child: Row(
                           children: [
@@ -119,56 +176,78 @@ class HomePage extends StatelessWidget {
                         ),
                       ),
                     // صف الكروت العلوي (المصروفات والإيرادات)
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        _buildStatCard(
-                          icon: Icons.trending_down,
-                          iconColor: colorScheme.error,
-                          value: controller.totalExpenses.toStringAsFixed(2),
-                          label: "المصروفات",
-                          valueColor: colorScheme.error,
-                          context: context,
-                        ),
-                        _buildStatCard(
-                          icon: Icons.moving,
-                          iconColor: colorScheme.primary,
-                          value: controller.totalRevenues.toStringAsFixed(2),
-                          label: "الايرادات",
-                          valueColor: colorScheme.primary,
-                          context: context,
-                        ),
-                      ],
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: _buildStatCard(
+                              icon: Icons.trending_down,
+                              iconColor: colorScheme.error,
+                              value: controller.totalExpenses.toStringAsFixed(2),
+                              label: "المصروفات",
+                              valueColor: colorScheme.error,
+                              context: context,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: _buildStatCard(
+                              icon: Icons.moving,
+                              iconColor: colorScheme.primary,
+                              value: controller.totalRevenues.toStringAsFixed(2),
+                              label: "الايرادات",
+                              valueColor: colorScheme.primary,
+                              context: context,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
+                    const SizedBox(height: 8),
                     // صف الكروت السفلي
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        _buildStatCard(
-                          icon: Icons.leaderboard,
-                          iconColor: Colors.orange,
-                          value: controller.netProfit.toStringAsFixed(0),
-                          label: "صافي الارباح",
-                          valueColor: Colors.orange,
-                          context: context,
-                        ),
-                        _buildStatCard(
-                          icon: Icons.card_travel,
-                          iconColor: Colors.brown,
-                          value: controller.totalBusiness.toString(),
-                          label: "اجمالي الاعمال",
-                          valueColor: Colors.brown,
-                          context: context,
-                        ),
-                        _buildStatCard(
-                          icon: Icons.groups_2,
-                          iconColor: colorScheme.primary,
-                          value: controller.totalWorkers.toString(),
-                          label: "العمال",
-                          valueColor: colorScheme.primary,
-                          context: context,
-                        ),
-                      ],
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: _buildStatCard(
+                              icon: Icons.leaderboard,
+                              iconColor: Colors.orange,
+                              value: controller.netProfit.toStringAsFixed(0),
+                              label: "صافي الارباح",
+                              valueColor: Colors.orange,
+                              context: context,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            
+                            child: _buildStatCard(
+
+                              icon: Icons.card_travel,
+                              iconColor: Colors.brown,
+                              value: controller.totalBusiness.toString(),
+                              label: "اجمالي الاعمال",
+                              valueColor: Colors.brown,
+                              context: context,
+                              withCurrency: false,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: _buildStatCard(
+                              icon: Icons.groups_2,
+                              iconColor: colorScheme.primary,
+                              value: controller.totalWorkers.toString(),
+                              label: "العمال",
+                              valueColor: colorScheme.primary,
+                              context: context,
+                              withCurrency: false,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                     const SizedBox(height: 20),
                     // قسم الأعمال الأخيرة
@@ -192,45 +271,50 @@ class HomePage extends StatelessWidget {
     required String label,
     required Color valueColor,
     required BuildContext context,
+    bool withCurrency = true,
   }) {
     final colorScheme = Theme.of(context).colorScheme;
+    final bool isBigCard = label == "المصروفات" || label == "الايرادات";
     return Card(
       elevation: 2,
       color: colorScheme.surface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Container(
-        width: label == "المصروفات" || label == "الايرادات" ? 160 : 100,
+        width: double.infinity,
         height: 100,
         margin: const EdgeInsets.all(10),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
+          crossAxisAlignment: CrossAxisAlignment.center,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Container(
               width: 35,
               height: 35,
               decoration: BoxDecoration(
-                color: iconColor.withOpacity(0.1),
+                color: iconColor.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Icon(icon, color: iconColor, size: 20),
             ),
             const SizedBox(height: 10),
             Text(
-              "$value ريال",
+              withCurrency ? "$value ريال" : value,
               style: TextStyle(
                 color: valueColor,
-                fontSize: label == "المصروفات" || label == "الايرادات" ? 18 : 15,
+                fontSize: isBigCard ? 16 : 14,
                 fontWeight: FontWeight.bold,
               ),
               overflow: TextOverflow.ellipsis,
+              maxLines: 1,
             ),
             Text(
               label,
               style: TextStyle(
                 color: colorScheme.onSurfaceVariant,
-                fontSize: 14,
+                fontSize: isBigCard ? 13 : 11,
               ),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
             ),
           ],
         ),
@@ -252,13 +336,8 @@ class HomePage extends StatelessWidget {
             children: [
               TextButton(
                 onPressed: () {
-                  // الانتقال إلى صفحة الأعمال (index 3)
-                  // نفترض أن changePage موجود
-                  if (controller.changePage != null) {
-                    // نحتاج إلى تمرير changePage من الخارج
-                    // ولكننا في هذه الحالة يمكننا استخدام context للوصول إلى الـ Scaffold أو الـ Navigator
-                    // أفضل طريقة هي تمرير changePage عبر الـ constructor
-                  }
+                  // الانتقال إلى صفحة الأعمال (index 1)
+                  // Widget.changePag?.call(1);
                 },
                 child: Text(
                   "عرض الكل",
@@ -322,15 +401,19 @@ class HomePage extends StatelessWidget {
           date = 'بدون تاريخ';
         }
         Color statusColor = colorScheme.primary;
-        if (status == 'مكتمل') statusColor = Colors.green;
-        else if (status == 'ملغي') statusColor = colorScheme.error;
-        else if (status == 'جاري التنفيذ') statusColor = Colors.orange;
+        if (status == 'مكتمل') {
+          statusColor = Colors.green;
+        } else if (status == 'ملغي') {
+          statusColor = colorScheme.error;
+        } else if (status == 'جاري التنفيذ') {
+          statusColor = Colors.orange;
+        }
 
         return Container(
           margin: const EdgeInsets.only(bottom: 10),
           child: Card(
             elevation: 2,
-            color: !isSynced ? Colors.orange.withOpacity(0.05) : colorScheme.surface,
+            color: !isSynced ? Colors.orange.withValues(alpha: 0.05) : colorScheme.surface,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
               side: !isSynced ? BorderSide(color: Colors.orange, width: 1) : BorderSide.none,
@@ -390,7 +473,7 @@ class HomePage extends StatelessWidget {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
-                          color: statusColor.withOpacity(0.1),
+                          color: statusColor.withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Text(
@@ -481,7 +564,7 @@ class HomePage extends StatelessWidget {
                     padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
                     child: Card(
                       elevation: 2,
-                      color: !isSynced ? Colors.orange.withOpacity(0.05) : colorScheme.surface,
+                      color: !isSynced ? Colors.orange.withValues(alpha: 0.05) : colorScheme.surface,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
                         side: !isSynced ? BorderSide(color: Colors.orange, width: 1) : BorderSide.none,

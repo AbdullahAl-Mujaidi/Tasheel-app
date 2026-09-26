@@ -20,7 +20,7 @@ class ReportsPage extends StatelessWidget {
             return Scaffold(
               appBar: AppBar(
                 title: Text(
-                  "تساهيل",
+                  "تسهيل",
                   style: TextStyle(
                     fontWeight: FontWeight.bold,
                     color: colorScheme.primary,
@@ -40,7 +40,7 @@ class ReportsPage extends StatelessWidget {
           return Scaffold(
             appBar: AppBar(
               title: Text(
-                "تساهيل",
+                "تسهيل",
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   color: colorScheme.primary,
@@ -75,7 +75,7 @@ class ReportsPage extends StatelessWidget {
                       child: Container(
                         padding: EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                         decoration: BoxDecoration(
-                          color: Colors.orange.withOpacity(0.2),
+                          color: Colors.orange.withValues(alpha: 0.2),
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Row(
@@ -102,9 +102,9 @@ class ReportsPage extends StatelessWidget {
                         margin: EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                         padding: EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: Colors.orange.withOpacity(0.1),
+                          color: Colors.orange.withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                          border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
                         ),
                         child: Row(
                           children: [
@@ -175,7 +175,7 @@ class ReportsPage extends StatelessWidget {
                 Container(
                   padding: EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: colorScheme.primary.withOpacity(0.1),
+                    color: colorScheme.primary.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Icon(Icons.today, color: colorScheme.primary, size: 24),
@@ -202,8 +202,8 @@ class ReportsPage extends StatelessWidget {
                     padding: EdgeInsets.all(10),
                     decoration: BoxDecoration(
                       color: controller.todayProfit >= 0
-                          ? Colors.green.withOpacity(0.1)
-                          : Colors.red.withOpacity(0.1),
+                          ? Colors.green.withValues(alpha: 0.1)
+                          : Colors.red.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Column(
@@ -239,7 +239,7 @@ class ReportsPage extends StatelessWidget {
                   child: Container(
                     padding: EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: Colors.green.withOpacity(0.1),
+                      color: Colors.green.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Column(
@@ -271,7 +271,7 @@ class ReportsPage extends StatelessWidget {
                   child: Container(
                     padding: EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: Colors.red.withOpacity(0.1),
+                      color: Colors.red.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Column(
@@ -310,21 +310,25 @@ class ReportsPage extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
-        _buildStatCard(
-          icon: Icons.trending_down,
-          iconColor: colorScheme.error,
-          value: controller.totalExpenses.toStringAsFixed(2),
-          label: "المصروفات الكلية",
-          valueColor: colorScheme.error,
-          colorScheme: colorScheme,
+        Flexible(
+          child: _buildStatCard(
+            icon: Icons.trending_down,
+            iconColor: colorScheme.error,
+            value: controller.totalExpenses.toStringAsFixed(2),
+            label: "المصروفات الكلية",
+            valueColor: colorScheme.error,
+            colorScheme: colorScheme,
+          ),
         ),
-        _buildStatCard(
-          icon: Icons.moving,
-          iconColor: colorScheme.primary,
-          value: controller.totalRevenues.toStringAsFixed(2),
-          label: "الإيرادات الكلية",
-          valueColor: colorScheme.primary,
-          colorScheme: colorScheme,
+        Flexible(
+          child: _buildStatCard(
+            icon: Icons.moving,
+            iconColor: colorScheme.primary,
+            value: controller.totalRevenues.toStringAsFixed(2),
+            label: "الإيرادات الكلية",
+            valueColor: colorScheme.primary,
+            colorScheme: colorScheme,
+          ),
         ),
       ],
     );
@@ -343,7 +347,7 @@ class ReportsPage extends StatelessWidget {
       color: colorScheme.surface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Container(
-        width: 160,
+        width: double.infinity,
         height: 100,
         margin: EdgeInsets.all(10),
         child: Column(
@@ -354,7 +358,7 @@ class ReportsPage extends StatelessWidget {
               width: 35,
               height: 35,
               decoration: BoxDecoration(
-                color: iconColor.withOpacity(0.1),
+                color: iconColor.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Icon(icon, color: iconColor, size: 20),

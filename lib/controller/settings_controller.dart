@@ -1,7 +1,8 @@
+// ignore_for_file: avoid_print
 // lib/controllers/settings_controller.dart
 import 'dart:async';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fkra/model/settings_model.dart';
+import 'package:fkra/services/activity_service.dart';
 import 'package:flutter/material.dart';
 
 class SettingsController extends ChangeNotifier {
@@ -23,6 +24,9 @@ class SettingsController extends ChangeNotifier {
 
   // التحديثات المعلقة
   List<Map<String, dynamic>> _pendingUpdates = [];
+
+  // عمليات الحقول المخصصة المعلقة (إضافة/تعديل/حذف) التي لم تُرفع للسحاب بعد
+  List<Map<String, dynamic>> _pendingCustomFieldOps = [];
 
   // متغيرات نافذة الحقل المخصص
   String newFieldName = '';
@@ -78,6 +82,7 @@ class SettingsController extends ChangeNotifier {
     }
     customFieldsList = await _model.loadCachedCustomFields();
     _pendingUpdates = await _model.loadPendingUpdates();
+    _pendingCustomFieldOps = await _model.loadPendingCustomFieldOps();
     notifyListeners();
   }
 
@@ -121,13 +126,46 @@ class SettingsController extends ChangeNotifier {
         await _model.savePendingUpdates(_pendingUpdates);
       }
 
+      // مزامنة عمليات الحقول المخصصة المعلقة
+      await _flushPendingCustomFieldOps();
+
       // تحديث البيانات من الخادم
       await fetchUserData();
       await fetchCustomFields();
       notifyListeners();
+
+      // إبلاغ الخادم بآخر مزامنة (إضافة آمنة ولا تمس منطق المزامنة)
+      await ActivityService.record(userId: userId, isSync: true);
     } catch (e) {
       print('خطأ في المزامنة: $e');
     }
+  }
+
+  // رفع عمليات الحقول المخصصة المعلقة إلى السحاب
+  Future<void> _flushPendingCustomFieldOps() async {
+    if (_pendingCustomFieldOps.isEmpty) return;
+    final List<Map<String, dynamic>> remaining = [];
+    for (var op in _pendingCustomFieldOps) {
+      try {
+        final String type = op['op'] as String;
+        final Map<String, dynamic> data =
+            Map<String, dynamic>.from(op['data'] as Map);
+        final String? id = data['id']?.toString();
+        if (id == null) continue;
+        if (type == 'delete') {
+          await _model.deleteCustomFieldFromFirestore(id);
+        } else if (type == 'add') {
+          await _model.saveCustomFieldToFirestore(id, data, isNew: true);
+        } else if (type == 'update') {
+          await _model.saveCustomFieldToFirestore(id, data, isNew: false);
+        }
+      } catch (e) {
+        print('فشل رفع عملية حقل مخصص: $e');
+        remaining.add(op);
+      }
+    }
+    _pendingCustomFieldOps = remaining;
+    await _model.savePendingCustomFieldOps(_pendingCustomFieldOps);
   }
 
   // ========== جلب البيانات من Firebase ==========
@@ -272,11 +310,6 @@ class SettingsController extends ChangeNotifier {
       throw Exception('يرجى إضافة خيارات للقائمة المنسدلة');
     }
 
-    final hasInternet = await _model.hasInternet();
-    if (!hasInternet) {
-      throw Exception('لا يوجد اتصال بالإنترنت. لا يمكن إضافة أو تعديل الحقول.');
-    }
-
     dynamic defaultValue;
     switch (selectedFieldType) {
       case 'رقم':
@@ -306,21 +339,67 @@ class SettingsController extends ChangeNotifier {
       fieldData['options'] = newFieldOptions;
     }
 
+    final String nowIso = DateTime.now().toIso8601String();
+
     if (isEditingField) {
-      fieldData['updatedAt'] = FieldValue.serverTimestamp();
-      await _model.updateCustomFieldInFirestore(editingFieldId!, fieldData);
+      final String id = editingFieldId!;
+      fieldData['id'] = id;
+      fieldData['updatedAt'] = nowIso;
+      // تحديث القائمة المحلية فوراً
+      final int index = customFieldsList.indexWhere((f) => f['id'] == id);
+      if (index != -1) {
+        customFieldsList[index] = Map<String, dynamic>.from(fieldData);
+      }
+      _pendingCustomFieldOps.add({'op': 'update', 'data': Map.of(fieldData)});
     } else {
-      fieldData['createdAt'] = FieldValue.serverTimestamp();
-      await _model.addCustomFieldToFirestore(fieldData);
+      final String id = 'field_${DateTime.now().millisecondsSinceEpoch}';
+      fieldData['id'] = id;
+      fieldData['createdAt'] = nowIso;
+      customFieldsList.insert(0, Map<String, dynamic>.from(fieldData));
+      _pendingCustomFieldOps.add({'op': 'add', 'data': Map.of(fieldData)});
+      await _model.propagateCustomFieldToBusinesses(
+        newFieldNameController.text.trim(),
+        defaultValue,
+      );
     }
 
-    await fetchCustomFields();
+    // حفظ محلياً أولاً ليظهر الحقل حتى دون اتصال
+    await _model.saveCustomFieldsLocally(customFieldsList);
+    await _model.savePendingCustomFieldOps(_pendingCustomFieldOps);
+
+    // رفع للسحاب فوراً عند توفر الاتصال
+    final hasInternet = await _model.hasInternet();
+    if (hasInternet) {
+      try {
+        await _flushPendingCustomFieldOps();
+      } catch (e) {
+        print('فشل مزامنة الحقل مع السحاب: $e');
+      }
+      await fetchCustomFields();
+    }
+
     resetFieldForm();
   }
 
   Future<void> deleteCustomField(String fieldId) async {
-    await _model.deleteCustomFieldFromFirestore(fieldId);
-    await fetchCustomFields();
+    // حذف من القائمة المحلية فوراً
+    customFieldsList.removeWhere((f) => f['id'] == fieldId);
+    await _model.saveCustomFieldsLocally(customFieldsList);
+
+    _pendingCustomFieldOps.add({'op': 'delete', 'data': {'id': fieldId}});
+    await _model.savePendingCustomFieldOps(_pendingCustomFieldOps);
+
+    // حذف من السحاب فوراً عند توفر الاتصال
+    final hasInternet = await _model.hasInternet();
+    if (hasInternet) {
+      try {
+        await _flushPendingCustomFieldOps();
+        await fetchCustomFields();
+      } catch (e) {
+        print('فشل حذف الحقل من السحاب: $e');
+      }
+    }
+    notifyListeners();
   }
 
   // ========== تسجيل الخروج ==========

@@ -1,13 +1,28 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fkra/controller/business_controller.dart';
+import 'package:fkra/model/team_member_model.dart';
+import 'package:fkra/services/member_session_service.dart';
+import 'package:fkra/view/business_details_view.dart';
+import 'package:fkra/view/business_reports_view.dart';
+import 'package:fkra/view/widgets/delegated_accounts_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:awesome_dialog/awesome_dialog.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter/services.dart';
 
 class BusinessPage extends StatelessWidget {
   final String userId;
 
   const BusinessPage({super.key, required this.userId});
+
+  // الأزرار تظهر حسب صلاحية المستخدم الحالي؛ المالك يملك كل شيء ضمناً.
+  bool _canCreateBusiness() =>
+      MemberSessionService.instance.canCreate(TeamPermissions.businesses);
+  bool _canUpdateBusiness() =>
+      MemberSessionService.instance.canUpdate(TeamPermissions.businesses);
+  bool _canDeleteBusiness() =>
+      MemberSessionService.instance.canDelete(TeamPermissions.businesses);
 
   @override
   Widget build(BuildContext context) {
@@ -20,7 +35,7 @@ class BusinessPage extends StatelessWidget {
           if (controller.isLoading) {
             return Scaffold(
               appBar: AppBar(
-                title: Text("تساهيل",
+                title: Text("تسهيل",
                     style: TextStyle(color: colorScheme.primary)),
                 centerTitle: true,
                 backgroundColor: colorScheme.surface,
@@ -42,7 +57,7 @@ class BusinessPage extends StatelessWidget {
           return Scaffold(
             appBar: AppBar(
               title: Text(
-                "تساهيل",
+                "تسهيل",
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   color: colorScheme.primary,
@@ -52,6 +67,25 @@ class BusinessPage extends StatelessWidget {
               centerTitle: true,
               backgroundColor: colorScheme.surface,
               elevation: 0,
+              leadingWidth: 100,
+              leading: TextButton(
+                onPressed: () {
+                  DelegatedAccountsDialog.show(context, onAccountSwitched: () {
+                    controller.syncWithFirestore();
+                  });
+                },
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.supervisor_account_rounded, size: 18, color: colorScheme.primary),
+                    const SizedBox(width: 2),
+                    Text(
+                      'المفوضين',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: colorScheme.primary),
+                    ),
+                  ],
+                ),
+              ),
               actions: [
                 IconButton(
                   onPressed: controller.isOffline
@@ -94,7 +128,7 @@ class BusinessPage extends StatelessWidget {
                         padding:
                             EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                         decoration: BoxDecoration(
-                          color: Colors.orange.withOpacity(0.2),
+                          color: Colors.orange.withValues(alpha: 0.2),
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Row(
@@ -122,7 +156,8 @@ class BusinessPage extends StatelessWidget {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        ElevatedButton.icon(
+                        if (_canCreateBusiness())
+                          ElevatedButton.icon(
                           onPressed: () {
                             controller.resetForm();
                             _showAddEditBusinessBottomSheet(
@@ -152,15 +187,40 @@ class BusinessPage extends StatelessWidget {
                       ],
                     ),
                   ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => BusinessReportsView(
+                              businesses: controller.businesses,
+                              transactions: controller.transactions,
+                            ),
+                          ),
+                        );
+                      },
+                      icon: Icon(Icons.table_view, size: 18),
+                      label: const Text(
+                        'تقارير الأعمال',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: colorScheme.primary,
+                        minimumSize: const Size.fromHeight(46),
+                      ),
+                    ),
+                  ),
+                  SizedBox(height: 5),
                   if (controller.isOffline)
                     Container(
                       margin: EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                       padding: EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: Colors.orange.withOpacity(0.1),
+                        color: Colors.orange.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(10),
                         border:
-                            Border.all(color: Colors.orange.withOpacity(0.3)),
+                            Border.all(color: Colors.orange.withValues(alpha: 0.3)),
                       ),
                       child: Row(
                         children: [
@@ -228,7 +288,7 @@ class BusinessPage extends StatelessWidget {
                       ],
                     ),
                   ),
-                  if (controller.businesses.isNotEmpty)
+                  if (controller.filteredBusinesses.isNotEmpty)
                     Padding(
                       padding:
                           EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -242,13 +302,13 @@ class BusinessPage extends StatelessWidget {
                               fontSize: 12,
                             ),
                           ),
-                          if (controller.businesses
+                          if (controller.filteredBusinesses
                               .any((e) => e['synced'] == 0))
                             Container(
                               padding: EdgeInsets.symmetric(
                                   horizontal: 8, vertical: 4),
                               decoration: BoxDecoration(
-                                color: Colors.orange.withOpacity(0.2),
+                                color: Colors.orange.withValues(alpha: 0.2),
                                 borderRadius: BorderRadius.circular(12),
                               ),
                               child: Text(
@@ -343,15 +403,17 @@ class BusinessPage extends StatelessWidget {
     String status = data['status'] ?? '';
     bool isSynced = data['synced'] == 1;
 
-    if (status == 'مكتمل')
+    if (status == 'مكتمل') {
       statusColor = Colors.green;
-    else if (status == 'ملغي')
+    } else if (status == 'ملغي') {
       statusColor = colorScheme.error;
-    else if (status == 'جاري التنفيذ') statusColor = Colors.orange;
+    } else if (status == 'جاري التنفيذ') {
+      statusColor = Colors.orange;
+    }
 
     return Card(
       margin: EdgeInsets.all(10),
-      color: !isSynced ? Colors.orange.withOpacity(0.05) : colorScheme.surface,
+      color: !isSynced ? Colors.orange.withValues(alpha: 0.05) : colorScheme.surface,
       elevation: 2,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
@@ -359,7 +421,10 @@ class BusinessPage extends StatelessWidget {
             ? BorderSide(color: Colors.orange, width: 1)
             : BorderSide.none,
       ),
-      child: Container(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => _openDetails(context, controller, data['id']),
+        child: Container(
         padding: EdgeInsets.all(10),
         child: Column(
           children: [
@@ -377,27 +442,29 @@ class BusinessPage extends StatelessWidget {
                               color: Colors.orange, size: 20),
                         ),
                       ),
-                    IconButton(
-                      onPressed: () {
-                        controller.loadBusinessForEditing(data);
-                        _showAddEditBusinessBottomSheet(
-                            context, controller, colorScheme);
-                      },
-                      icon: Icon(Icons.edit, color: colorScheme.primary),
-                      tooltip: 'تعديل العمل',
-                    ),
-                    IconButton(
-                      onPressed: () => _confirmDelete(context, data['id'],
-                          data['name'] ?? 'بدون اسم', controller),
-                      icon: Icon(Icons.delete, color: colorScheme.error),
-                      tooltip: 'حذف العمل',
-                    ),
+                    if (_canUpdateBusiness())
+                      IconButton(
+                        onPressed: () {
+                          controller.loadBusinessForEditing(data);
+                          _showAddEditBusinessBottomSheet(
+                              context, controller, colorScheme);
+                        },
+                        icon: Icon(Icons.edit, color: colorScheme.primary),
+                        tooltip: 'تعديل العمل',
+                      ),
+                    if (_canDeleteBusiness())
+                      IconButton(
+                        onPressed: () => _confirmDelete(context, data['id'],
+                            data['name'] ?? 'بدون اسم', controller),
+                        icon: Icon(Icons.delete, color: colorScheme.error),
+                        tooltip: 'حذف العمل',
+                      ),
                   ],
                 ),
                 Container(
                   padding: EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(
-                    color: statusColor.withOpacity(0.1),
+                    color: statusColor.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Text(status,
@@ -427,10 +494,12 @@ class BusinessPage extends StatelessWidget {
                   style: TextStyle(color: colorScheme.onSurfaceVariant),
                   textAlign: TextAlign.right,
                 ),
-                if (data['customFields'] != null &&
+                if (data['customFields'] is Map &&
                     (data['customFields'] as Map).isNotEmpty)
                   ..._buildCustomFieldsDisplay(
-                      data['customFields'], colorScheme),
+                      Map<String, dynamic>.from(
+                          data['customFields'] as Map),
+                      colorScheme),
                 Divider(color: colorScheme.outline),
                 SizedBox(height: 10),
                 Row(
@@ -451,10 +520,132 @@ class BusinessPage extends StatelessWidget {
                     ),
                   ],
                 ),
-              ],
+                if ((data['createdByLabel'] ?? '').toString().isNotEmpty ||
+                    (data['lastModifiedByLabel'] ?? '')
+                        .toString()
+                        .isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Wrap(
+                      alignment: WrapAlignment.end,
+                      spacing: 12,
+                      runSpacing: 4,
+                      children: [
+                        if ((data['createdByLabel'] ?? '').toString().isNotEmpty)
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.person_add_alt_1,
+                                  size: 14, color: colorScheme.primary),
+                              const SizedBox(width: 4),
+                              Text(
+                                'أضيف بواسطة: ${data['createdByLabel']}',
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    color: colorScheme.onSurfaceVariant),
+                              ),
+                            ],
+                          ),
+                        if ((data['lastModifiedByLabel'] ?? '')
+                            .toString()
+                            .isNotEmpty)
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.edit,
+                                  size: 14, color: Colors.orange),
+                              const SizedBox(width: 4),
+                              Text(
+                                'آخر تعديل: ${data['lastModifiedByLabel']}',
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    color: colorScheme.onSurfaceVariant),
+                              ),
+                            ],
+                          ),
+                      ],
+                    ),
+                  ),
+                SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildCardMoneyStat(
+                          'الواصل',
+                          (data['totalPaid'] as num?)?.toInt() ?? 0,
+                          Colors.green,
+                          colorScheme),
+                    ),
+SizedBox(width: 8),
+                    Expanded(
+                      child: _buildCardMoneyStat(
+                          'المتبقي',
+                          (data['remaining'] as num?)?.toInt() ?? 0,
+                          ((data['remaining'] as num?)?.toInt() ?? 0) == 0
+                              ? Colors.green
+                              : Colors.orange,
+                          colorScheme),
+                    ),
+                  ],
+                ),
+                if (status != 'مكتمل' && _canUpdateBusiness())
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: OutlinedButton.icon(
+                      onPressed: () => _confirmMarkCompleted(
+                          context, data['id'], controller),
+                      icon: const Icon(Icons.check_circle_outline,
+                          size: 18, color: Colors.green),
+                      label: const Text(
+                        'اضافة كمكتمل',
+                        style: TextStyle(
+                            color: Colors.green,
+                            fontWeight: FontWeight.bold),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size.fromHeight(40),
+                        side: BorderSide(
+                            color: Colors.green.withValues(alpha: 0.5)),
+                      ),
+                    ),
+                  ),
+],
             ),
           ],
         ),
+      ),
+      ),
+    );
+  }
+
+  Widget _buildCardMoneyStat(
+    String label,
+    int value,
+    Color color,
+    ColorScheme colorScheme,
+  ) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+                fontSize: 12, color: colorScheme.onSurfaceVariant),
+          ),
+          SizedBox(height: 2),
+          Text(
+            "$value ريال",
+            style: TextStyle(
+                fontSize: 14, fontWeight: FontWeight.bold, color: color),
+          ),
+        ],
       ),
     );
   }
@@ -538,16 +729,71 @@ class BusinessPage extends StatelessWidget {
     ).show();
   }
 
+  // ========== إضافة العمل كمكتمل مباشرة من البطاقة ==========
+  void _confirmMarkCompleted(BuildContext context, String id,
+      BusinessController controller) {
+    AwesomeDialog(
+      context: context,
+      dialogType: DialogType.success,
+      animType: AnimType.bottomSlide,
+      title: 'تأكيد الاكتمال',
+      desc: 'هل تريد إضافة هذا العمل كمكتمل؟',
+      btnOkText: 'مكتمل',
+      btnCancelText: 'إلغاء',
+      btnOkOnPress: () async {
+        await controller.markBusinessCompleted(context, id);
+        if (context.mounted) {
+          _showStatusChangedDialog(context, controller, id,
+              Theme.of(context).colorScheme);
+        }
+      },
+    ).show();
+  }
+
+  // ========== رد فعل نتيجة تعديل العمل (متصل / غير متصل) ==========
+  void _showEditResultDialog(
+      BuildContext context, BusinessController controller) {
+    AwesomeDialog(
+      context: context,
+      dialogType:
+          controller.isOffline ? DialogType.info : DialogType.success,
+      animType: AnimType.bottomSlide,
+      title: controller.isOffline ? 'تم الحفظ محلياً' : 'تم التعديل',
+      desc: controller.isOffline
+          ? 'تم تعديل العمل محلياً وسيتم مزامنته تلقائياً عند عودة الاتصال.'
+          : 'تم تعديل العمل بنجاح.',
+      btnOkText: 'حسناً',
+      btnOkOnPress: () {},
+    ).show();
+  }
+
+  // ========== الانتقال لصفحة التفاصيل ==========
+  void _openDetails(
+    BuildContext context,
+    BusinessController controller,
+    dynamic workId,
+  ) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => BusinessDetailsView(
+          controller: controller,
+          workId: workId.toString(),
+        ),
+      ),
+    );
+  }
+
   // ========== نافذة إضافة/تعديل ==========
   void _showAddEditBusinessBottomSheet(
-    BuildContext context,
+    BuildContext pageContext,
     BusinessController controller,
     ColorScheme colorScheme,
   ) {
     showModalBottomSheet(
       showDragHandle: true,
       isScrollControlled: true,
-      context: context,
+      context: pageContext,
       backgroundColor: colorScheme.surface,
       builder: (context) {
         return StatefulBuilder(
@@ -557,9 +803,11 @@ class BusinessPage extends StatelessWidget {
               child: Container(
                 padding: EdgeInsets.all(15),
                 width: double.infinity,
-                height: MediaQuery.of(context).size.height * 0.9,
-                child: SingleChildScrollView(
-                  child: Column(
+height: MediaQuery.of(context).size.height * 0.9,
+                  child: SingleChildScrollView(
+                    padding: EdgeInsets.only(
+                        bottom: MediaQuery.of(context).viewInsets.bottom),
+                    child: Column(
                     children: [
                       Text(
                         controller.isEditing ? "تعديل عمل" : "إضافة عمل",
@@ -575,7 +823,7 @@ class BusinessPage extends StatelessWidget {
                           child: Container(
                             padding: EdgeInsets.all(8),
                             decoration: BoxDecoration(
-                              color: Colors.orange.withOpacity(0.1),
+                              color: Colors.orange.withValues(alpha: 0.1),
                               borderRadius: BorderRadius.circular(8),
                             ),
                             child: Row(
@@ -626,6 +874,27 @@ class BusinessPage extends StatelessWidget {
                         colorScheme: colorScheme,
                       ),
                       SizedBox(height: 20),
+                      _buildTextField(
+                        "المبلغ المدفوع (الواصل)",
+                        "0.0",
+                        (value) => controller.businessInitialPaid = value,
+                        initialValue: controller.businessInitialPaid,
+                        keyboardType: TextInputType.number,
+                        validator: (value) => _validateBusinessInitialPaid(
+                            value, controller.businessAmount),
+                        colorScheme: colorScheme,
+                      ),
+                      SizedBox(height: 20),
+                      _buildTextField(
+                        "رقم هاتف العميل",
+                        "ادخل رقم هاتف العميل",
+                        (value) => controller.businessClientPhone = value,
+                        initialValue: controller.businessClientPhone,
+                        keyboardType: TextInputType.phone,
+                        validator: (value) => _validateClientPhone(value),
+                        colorScheme: colorScheme,
+                      ),
+                      SizedBox(height: 20),
                       // تمرير context هنا
                       _buildDateField(
                           context, controller, colorScheme, setStateBottomSheet),
@@ -670,12 +939,45 @@ class BusinessPage extends StatelessWidget {
                           ElevatedButton(
                             onPressed: () async {
                               if (controller.isEditing) {
-                                await controller.editBusiness(
-                                    context, controller.editingBusinessId!);
+                                final String businessId =
+                                    controller.editingBusinessId!;
+                                final String previousStatus =
+                                    controller.getBusinessById(businessId)?['status']
+                                            ?.toString() ??
+                                        '';
+                                final String newStatus = controller.selectedStatus ??
+                                    'قيد الانتظار';
+
+                                final bool saved =
+                                    await controller.editBusiness(
+                                        context, businessId);
+                                if (!saved) return;
+                                if (context.mounted) {
+                                  Navigator.pop(context);
+                                  if (previousStatus != 'مكتمل' &&
+                                      newStatus == 'مكتمل') {
+                                    _showStatusChangedDialog(pageContext, controller,
+                                        businessId, colorScheme);
+                                  } else {
+                                    _showEditResultDialog(pageContext, controller);
+                                  }
+                                }
                               } else {
-                                await controller.addBusiness(context);
+                                final bool ok =
+                                    await controller.addBusiness(context);
+                                if (ok && context.mounted) {
+                                  Navigator.pop(context);
+                                  ScaffoldMessenger.of(pageContext)
+                                      .showSnackBar(
+                                    SnackBar(
+                                      content: Text(controller.isOffline
+                                          ? 'تم حفظ العمل محلياً وسيتم مزامنته تلقائياً عند عودة الاتصال'
+                                          : 'تم إضافة العمل بنجاح'),
+                                      backgroundColor: Colors.green,
+                                    ),
+                                  );
+                                }
                               }
-                              if (context.mounted) Navigator.pop(context);
                             },
                             style: ElevatedButton.styleFrom(
                                 backgroundColor: colorScheme.primary),
@@ -844,7 +1146,7 @@ class BusinessPage extends StatelessWidget {
         Directionality(
           textDirection: TextDirection.rtl,
           child: DropdownButtonFormField<String>(
-            value: controller.selectedStatus ?? "قيد الانتظار",
+            initialValue: controller.selectedStatus ?? "قيد الانتظار",
             decoration: InputDecoration(
               border:
                   OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
@@ -1021,10 +1323,12 @@ class BusinessPage extends StatelessWidget {
             },
             validator: isRequired
                 ? (value) {
-                    if (value == null || value.isEmpty)
+                    if (value == null || value.isEmpty) {
                       return 'هذا الحقل مطلوب';
-                    if (double.tryParse(value) == null)
+                    }
+                    if (double.tryParse(value) == null) {
                       return 'يرجى إدخال رقم صحيح';
+                    }
                     return null;
                   }
                 : null,
@@ -1157,7 +1461,7 @@ class BusinessPage extends StatelessWidget {
           Directionality(
             textDirection: TextDirection.rtl,
             child: DropdownButtonFormField<String>(
-              value: controller.dropdownValues[fieldName] ??
+              initialValue: controller.dropdownValues[fieldName] ??
                   (options.isNotEmpty ? options[0] : null),
               decoration: InputDecoration(
                 border:
@@ -1229,5 +1533,255 @@ class BusinessPage extends StatelessWidget {
     if (amount <= 0) return 'المبلغ يجب أن يكون أكبر من 0';
     if (amount > 999999999) return 'المبلغ كبير جداً';
     return null;
+  }
+
+  String? _validateBusinessInitialPaid(String? value, String workAmount) {
+    if (value == null || value.trim().isEmpty) return null;
+    final int? paid = int.tryParse(value.trim());
+    if (paid == null || paid < 0) return 'يرجى إدخال مبلغ صحيح (0 فأكثر)';
+    final int? total = int.tryParse(workAmount);
+    if (total != null && paid > total) return 'المبلغ المدفوع أكبر من قيمة العمل';
+    return null;
+  }
+
+  String? _validateClientPhone(String? value) {
+    if (value == null || value.trim().isEmpty) return null;
+    String phone = value.trim();
+    if (phone.startsWith('+')) phone = phone.substring(1);
+    phone = phone.replaceAll(RegExp(r'[\s\-()]'), '');
+    if (!RegExp(r'^[0-9]+$').hasMatch(phone)) return 'رقم الهاتف يجب أن يحتوي على أرقام فقط';
+    if (phone.length < 9 || phone.length > 12) return 'رقم الهاتف غير صحيح (9-12 رقم)';
+    return null;
+  }
+
+  // ========== إشعار العميل عند اكتمال العمل ==========
+  void _showStatusChangedDialog(
+    BuildContext context,
+    BusinessController controller,
+    String businessId,
+    ColorScheme colorScheme,
+  ) {
+    AwesomeDialog(
+      context: context,
+      dialogType: DialogType.success,
+      animType: AnimType.bottomSlide,
+      title: 'تم تغيير الحالة',
+      desc: 'تم تغيير حالة العمل إلى مكتمل، هل تريد إبلاغ العميل بأن العمل أصبح جاهزاً؟',
+      btnOkText: 'نعم، إبلاغ العميل',
+      btnCancelText: 'لا، لاحقاً',
+      btnCancelOnPress: () {},
+      btnOkOnPress: () {
+        _showContactOptions(context, controller, businessId, colorScheme);
+      },
+      btnOkColor: colorScheme.primary,
+      btnCancelColor: colorScheme.outline,
+    ).show();
+  }
+
+  // ========== اختيار وسيلة إبلاغ العميل ==========
+  static const MethodChannel _smsChannel = MethodChannel('tasahel/sms');
+
+  void _showContactOptions(
+    BuildContext context,
+    BusinessController controller,
+    String businessId,
+    ColorScheme colorScheme,
+  ) {
+    showModalBottomSheet(
+      showDragHandle: true,
+      context: context,
+      backgroundColor: colorScheme.surface,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(15, 5, 15, 20),
+            child: Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    icon: Icon(Icons.sms_outlined, color: colorScheme.primary),
+                    label: Text('رسالة نصية'),
+                    style: OutlinedButton.styleFrom(
+                      padding: EdgeInsets.symmetric(vertical: 14),
+                    ),
+                    onPressed: () {
+                      Navigator.pop(sheetContext);
+                      _openMessagesAppDirect(context, controller, businessId);
+                    },
+                  ),
+                ),
+                SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton.icon(
+                    icon: Icon(Icons.chat_outlined, color: Colors.white),
+                    label: Text('واتساب'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Color(0xFF25D366),
+                      padding: EdgeInsets.symmetric(vertical: 14),
+                    ),
+                    onPressed: () {
+                      Navigator.pop(sheetContext);
+                      _openWhatsAppForClient(context, controller, businessId);
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // فتح تطبيق الرسائل الافتراضي مباشرةً مع الرسالة الجاهزة (بدون «فتح باستخدام»)
+  Future<void> _openMessagesAppDirect(
+    BuildContext context,
+    BusinessController controller,
+    String businessId,
+  ) async {
+    final business = controller.getBusinessById(businessId);
+    if (business == null) return;
+
+    final String clientPhone =
+        (business['clientPhone']?.toString() ?? '').trim();
+    if (clientPhone.isEmpty) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('لا يوجد رقم هاتف لهذا العميل، أضف الرقم في تعديل العمل'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    final String normalizedPhone = clientPhone.startsWith('+')
+        ? '+${clientPhone.substring(1).replaceAll(RegExp(r'[^\d]'), '')}'
+        : clientPhone.replaceAll(RegExp(r'[^\d]'), '');
+    final String message = _buildClientSmsMessage(business);
+
+    try {
+      final bool? opened = await _smsChannel.invokeMethod<bool>(
+        'openDefaultSmsApp',
+        {'phone': normalizedPhone, 'body': message},
+      );
+      if (opened == true) return;
+      if (!context.mounted) return;
+      await _openSmsForClient(context, controller, businessId);
+    } catch (_) {
+      if (!context.mounted) return;
+      await _openSmsForClient(context, controller, businessId);
+    }
+  }
+
+  Future<void> _openSmsForClient(
+    BuildContext context,
+    BusinessController controller,
+    String businessId,
+  ) async {
+    final business = controller.getBusinessById(businessId);
+    if (business == null) return;
+
+    final String clientPhone =
+        (business['clientPhone']?.toString() ?? '').trim();
+    if (clientPhone.isEmpty) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('لا يوجد رقم هاتف لهذا العميل، أضف الرقم في تعديل العمل'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    final String normalizedPhone = clientPhone.startsWith('+')
+        ? '+${clientPhone.substring(1).replaceAll(RegExp(r'[^\d]'), '')}'
+        : clientPhone.replaceAll(RegExp(r'[^\d]'), '');
+    final Uri smsUri = Uri(
+      scheme: 'sms',
+      path: normalizedPhone,
+      queryParameters: {'body': _buildClientSmsMessage(business)},
+    );
+
+    final bool canOpen = await canLaunchUrl(smsUri);
+    if (!context.mounted) return;
+    if (!canOpen) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('تعذر فتح تطبيق الرسائل على هذا الجهاز'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+    await launchUrl(smsUri);
+  }
+
+  Future<void> _openWhatsAppForClient(
+    BuildContext context,
+    BusinessController controller,
+    String businessId,
+  ) async {
+    final business = controller.getBusinessById(businessId);
+    if (business == null) return;
+
+    final String clientPhone =
+        (business['clientPhone']?.toString() ?? '').trim();
+    if (clientPhone.isEmpty) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('لا يوجد رقم هاتف لهذا العميل، أضف الرقم في تعديل العمل'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    final String whatsAppPhone = _normalizePhoneForWhatsApp(clientPhone);
+    final String message = _buildClientSmsMessage(business);
+    final String encodedMessage = Uri.encodeComponent(message);
+
+    // WhatsApp Click to Chat: فتح محادثة العميل مع تجهيز الرسالة فقط (بدون إرسال تلقائي)
+    final Uri whatsAppUri =
+        Uri.parse('https://wa.me/$whatsAppPhone?text=$encodedMessage');
+
+    final bool canOpen = await canLaunchUrl(whatsAppUri);
+    if (!context.mounted) return;
+    if (!canOpen) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('تعذر فتح واتساب، تأكد من تثبيت تطبيق واتساب على هذا الجهاز'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+    await launchUrl(whatsAppUri, mode: LaunchMode.externalApplication);
+  }
+
+  // ========== تحويل رقم العميل إلى صيغة واتساب الدولية ==========
+  String _normalizePhoneForWhatsApp(String phone) {
+    String digits = phone.replaceAll(RegExp(r'[^\d]'), '');
+    if (digits.startsWith('00')) digits = digits.substring(2);
+    if (!digits.startsWith('967') && digits.startsWith('0')) {
+      digits = digits.substring(1);
+    }
+    if (!digits.startsWith('967')) {
+      digits = '967$digits';
+    }
+    return digits;
+  }
+
+  String _buildClientSmsMessage(Map<String, dynamic> business) {
+    final String workName = (business['name']?.toString() ?? '').trim();
+    final String workPart = workName.isEmpty
+        ? 'نود إبلاغكم بأن العمل الخاص بكم أصبح جاهزاً للاستلام.'
+        : 'نود إبلاغكم بأن العمل "$workName" الخاص بكم أصبح جاهزاً للاستلام.';
+    return 'السلام عليكم،\n$workPart\nشكراً لتعاملكم معنا.';
   }
 }

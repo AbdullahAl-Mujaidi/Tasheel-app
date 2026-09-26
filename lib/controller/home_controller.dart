@@ -1,3 +1,4 @@
+// ignore_for_file: avoid_print
 // lib/controllers/home_controller.dart
 import 'dart:async';
 import 'package:fkra/model/home_model.dart';
@@ -28,8 +29,6 @@ class HomeController extends ChangeNotifier {
   HomeController({required this.userId}) : _model = HomeModel(userId: userId) {
     _init();
   }
-
-  get changePage => null;
 
   Future<void> _init() async {
     await _model.initStorage();
@@ -100,8 +99,9 @@ class HomeController extends ChangeNotifier {
   }
 
   void _startPeriodicStatsUpdate() {
-    _statsUpdateTimer = Timer.periodic(Duration(seconds: 30), (timer) {
-      // تحديث الإحصائيات من البيانات المحلية الحالية (إذا تغيرت)
+    _statsUpdateTimer = Timer.periodic(Duration(seconds: 30), (timer) async {
+      // إعادة قراءة الملفات المحلية ثم تحديث الإحصائيات من البيانات المحلية الحالية
+      await _model.reloadLocalData();
       final localStats = _model.calculateStatsFromLocal();
       totalExpenses = localStats['totalExpenses'];
       totalRevenues = localStats['totalRevenues'];
@@ -117,7 +117,8 @@ class HomeController extends ChangeNotifier {
   Future<void> refreshData() async {
     final hasInternet = await _model.hasInternet();
     if (!hasInternet) {
-      // استخدام البيانات المحلية
+      // استخدام البيانات المحلية (بعد إعادة قراءة الملفات)
+      await _model.reloadLocalData();
       final localStats = _model.calculateStatsFromLocal();
       totalExpenses = localStats['totalExpenses'];
       totalRevenues = localStats['totalRevenues'];
@@ -145,6 +146,7 @@ class HomeController extends ChangeNotifier {
     } catch (e) {
       print('خطأ في تحديث البيانات: $e');
       // الرجوع إلى البيانات المحلية
+      await _model.reloadLocalData();
       final localStats = _model.calculateStatsFromLocal();
       totalExpenses = localStats['totalExpenses'];
       totalRevenues = localStats['totalRevenues'];

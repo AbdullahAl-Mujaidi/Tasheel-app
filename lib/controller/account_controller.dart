@@ -1,5 +1,4 @@
-// lib/controllers/account_controller.dart
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:fkra/admin/services/firebase_usage_tracker.dart';
 import 'package:fkra/model/account_model.dart';
 import 'package:fkra/view/login_view.dart';
 import 'package:flutter/material.dart';
@@ -158,6 +157,7 @@ class AccountController extends ChangeNotifier {
       'phoneNumber': phoneController.text.trim(),
       'email': emailController.text.trim().toLowerCase(),
       'password': passwordController.text.trim(),
+      'userType': 'user',
     };
 
     final bool hasInternet = await _model.hasInternet();
@@ -169,6 +169,7 @@ class AccountController extends ChangeNotifier {
       notifyListeners();
       _clearForm();
 
+      if (!context.mounted) return;
       AwesomeDialog(
         context: context,
         dialogType: DialogType.info,
@@ -187,7 +188,7 @@ class AccountController extends ChangeNotifier {
 
     // هناك إنترنت → إنشاء الحساب
     try {
-      UserCredential userCredential = await _model.createAccountWithEmailPassword(
+      final userCredential = await _model.createAccountWithEmailPassword(
         email: userData['email'],
         password: userData['password'],
       );
@@ -195,18 +196,27 @@ class AccountController extends ChangeNotifier {
       final String userId = userCredential.user!.uid;
       await userCredential.user?.updateDisplayName(userData['fullName']);
       await userCredential.user?.reload();
+
+      // إرسال رسالة التحقق إلى البريد الإلكتروني
+      await _model.sendEmailVerification();
+
       await _model.saveUserDataToFirestore(userId: userId, userData: userData);
+      FirebaseUsageTracker.instance.recordSignup();
+
+      // تسجيل الخروج حتى لا يبقى المستخدم مسجل الدخول بحساب غير موثق
+      await _model.signOut();
 
       isLoading = false;
       notifyListeners();
       _clearForm();
 
+      if (!context.mounted) return;
       AwesomeDialog(
         context: context,
         dialogType: DialogType.success,
         animType: AnimType.scale,
         title: '✅ تم انشاء الحساب بنجاح',
-        desc: 'تم إنشاء حسابك وحفظ بياناتك بنجاح.\nسيتم إرسال بريد تأكيد إلى بريدك الإلكتروني.',
+        desc: 'تم إنشاء حسابك وحفظ بياناتك بنجاح.\nتم إرسال رسالة تحقق إلى بريدك الإلكتروني.\nيرجى فتح البريد وتأكيد الحساب ثم تسجيل الدخول.',
         btnOkText: 'تسجيل الدخول',
         btnOkOnPress: () {
           Navigator.of(context).pushReplacement(
@@ -215,46 +225,40 @@ class AccountController extends ChangeNotifier {
         },
       ).show();
 
-    } on FirebaseAuthException catch (e) {
-      isLoading = false;
-      notifyListeners();
-
-      String errorMessage = '';
-      switch (e.code) {
-        case 'email-already-in-use':
-          errorMessage = 'هذا البريد الإلكتروني مستخدم بالفعل. الرجاء استخدام بريد آخر أو تسجيل الدخول.';
-          break;
-        case 'invalid-email':
-          errorMessage = 'البريد الإلكتروني غير صحيح.';
-          break;
-        case 'weak-password':
-          errorMessage = 'كلمة المرور ضعيفة جداً. الرجاء استخدام كلمة مرور أقوى.';
-          break;
-        case 'operation-not-allowed':
-          errorMessage = 'عذراً، خدمة إنشاء الحساب غير مفعلة حالياً.';
-          break;
-        default:
-          errorMessage = 'حدث خطأ: ${e.message}';
-      }
-
-      AwesomeDialog(
-        context: context,
-        dialogType: DialogType.error,
-        animType: AnimType.scale,
-        title: '❌ فشل إنشاء الحساب',
-        desc: errorMessage,
-        btnCancelText: 'حسناً',
-        btnCancelOnPress: () {},
-      ).show();
     } catch (e) {
       isLoading = false;
       notifyListeners();
+
+      final String? authCode = _model.errorCodeOf(e);
+      String errorMessage = '';
+      if (authCode != null) {
+        switch (authCode) {
+          case 'email-already-in-use':
+            errorMessage = 'هذا البريد الإلكتروني مستخدم بالفعل. الرجاء استخدام بريد آخر أو تسجيل الدخول.';
+            break;
+          case 'invalid-email':
+            errorMessage = 'البريد الإلكتروني غير صحيح.';
+            break;
+          case 'weak-password':
+            errorMessage = 'كلمة المرور ضعيفة جداً. الرجاء استخدام كلمة مرور أقوى.';
+            break;
+          case 'operation-not-allowed':
+            errorMessage = 'عذراً، خدمة إنشاء الحساب غير مفعلة حالياً.';
+            break;
+          default:
+            errorMessage = 'حدث خطأ: ${_model.errorMessageOf(e)}';
+        }
+      } else {
+        errorMessage = 'حدث خطأ غير متوقع: ${e.toString()}';
+      }
+
+      if (!context.mounted) return;
       AwesomeDialog(
         context: context,
         dialogType: DialogType.error,
         animType: AnimType.scale,
-        title: 'خطأ',
-        desc: 'حدث خطأ غير متوقع: ${e.toString()}',
+        title: authCode != null ? '❌ فشل إنشاء الحساب' : 'خطأ',
+        desc: errorMessage,
         btnCancelText: 'حسناً',
         btnCancelOnPress: () {},
       ).show();

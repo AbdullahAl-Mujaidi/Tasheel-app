@@ -41,48 +41,48 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyAaxplEmgIiAkz70Y9FZhzAwJwpA_69swg',
-    appId: '1:35492176424:web:7a4520941ee412e0418b1d',
-    messagingSenderId: '35492176424',
-    projectId: 'tashel-a589d',
-    authDomain: 'tashel-a589d.firebaseapp.com',
-    storageBucket: 'tashel-a589d.firebasestorage.app',
-    measurementId: 'G-XLN12S96BL',
+    apiKey: 'AIzaSyDzQzw5mNje-Gi32J1VL7Un3IWlfjn-F2Q',
+    appId: '1:854204491835:web:0a001ea4bc4a351694141e',
+    messagingSenderId: '854204491835',
+    projectId: 'tasheel-e4d47',
+    authDomain: 'tasheel-e4d47.firebaseapp.com',
+    storageBucket: 'tasheel-e4d47.firebasestorage.app',
+    measurementId: 'G-XF5L5HWYRM',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyABWa0LjFrKBQkMSMxPX5yauH6axbOpddk',
-    appId: '1:35492176424:android:bcd049064a4ae5e6418b1d',
-    messagingSenderId: '35492176424',
-    projectId: 'tashel-a589d',
-    storageBucket: 'tashel-a589d.firebasestorage.app',
+    apiKey: 'AIzaSyArRmPcSATyLxmL-CwNiDjZerK0U3-WIFw',
+    appId: '1:854204491835:android:d2fea96b2bc290cd94141e',
+    messagingSenderId: '854204491835',
+    projectId: 'tasheel-e4d47',
+    storageBucket: 'tasheel-e4d47.firebasestorage.app',
   );
-
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyC0UMHCrlmCpWhr_4Amtjno1e0D4kmEBPY',
-    appId: '1:35492176424:ios:dc53b6e07507ec14418b1d',
-    messagingSenderId: '35492176424',
-    projectId: 'tashel-a589d',
-    storageBucket: 'tashel-a589d.firebasestorage.app',
+    apiKey: 'AIzaSyDw9apPyewq1lLge-0SwzGSXKNvCtxcuiQ',
+    appId: '1:854204491835:ios:44f47fe0d903c36994141e',
+    messagingSenderId: '854204491835',
+    projectId: 'tasheel-e4d47',
+    storageBucket: 'tasheel-e4d47.firebasestorage.app',
+    iosClientId: '854204491835-d2jernf6u2h906dlfnht04hug834bdlh.apps.googleusercontent.com',
     iosBundleId: 'com.example.fkra',
   );
-
   static const FirebaseOptions macos = FirebaseOptions(
-    apiKey: 'AIzaSyC0UMHCrlmCpWhr_4Amtjno1e0D4kmEBPY',
-    appId: '1:35492176424:ios:dc53b6e07507ec14418b1d',
-    messagingSenderId: '35492176424',
-    projectId: 'tashel-a589d',
-    storageBucket: 'tashel-a589d.firebasestorage.app',
+    apiKey: 'AIzaSyDw9apPyewq1lLge-0SwzGSXKNvCtxcuiQ',
+    appId: '1:854204491835:ios:44f47fe0d903c36994141e',
+    messagingSenderId: '854204491835',
+    projectId: 'tasheel-e4d47',
+    storageBucket: 'tasheel-e4d47.firebasestorage.app',
+    iosClientId: '854204491835-d2jernf6u2h906dlfnht04hug834bdlh.apps.googleusercontent.com',
     iosBundleId: 'com.example.fkra',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(
-    apiKey: 'AIzaSyAaxplEmgIiAkz70Y9FZhzAwJwpA_69swg',
-    appId: '1:35492176424:web:309e6e9d91bf82d0418b1d',
-    messagingSenderId: '35492176424',
-    projectId: 'tashel-a589d',
-    authDomain: 'tashel-a589d.firebaseapp.com',
-    storageBucket: 'tashel-a589d.firebasestorage.app',
-    measurementId: 'G-QSY7921S77',
+    apiKey: 'AIzaSyDzQzw5mNje-Gi32J1VL7Un3IWlfjn-F2Q',
+    appId: '1:854204491835:web:69da390e98f1a05394141e',
+    messagingSenderId: '854204491835',
+    projectId: 'tasheel-e4d47',
+    authDomain: 'tasheel-e4d47.firebaseapp.com',
+    storageBucket: 'tasheel-e4d47.firebasestorage.app',
+    measurementId: 'G-7CHC83YEXR',
   );
 }

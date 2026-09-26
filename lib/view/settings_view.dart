@@ -1,6 +1,6 @@
-// lib/views/settings_view.dart
 import 'package:fkra/controller/settings_controller.dart';
 import 'package:fkra/view/login_view.dart';
+import 'package:fkra/view/team_members_view.dart';
 import 'package:flutter/material.dart';
 import 'package:awesome_dialog/awesome_dialog.dart';
 import 'package:provider/provider.dart';
@@ -28,7 +28,7 @@ class SettingsPage extends StatelessWidget {
           return Scaffold(
             appBar: AppBar(
               title: Text(
-                "تساهيل",
+                "تسهيل",
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   color: colorScheme.primary,
@@ -77,7 +77,7 @@ class SettingsPage extends StatelessWidget {
                       child: Container(
                         padding: EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                         decoration: BoxDecoration(
-                          color: Colors.orange.withOpacity(0.2),
+                          color: Colors.orange.withValues(alpha: 0.2),
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Row(
@@ -103,9 +103,9 @@ class SettingsPage extends StatelessWidget {
                       margin: EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                       padding: EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: Colors.orange.withOpacity(0.1),
+                        color: Colors.orange.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                        border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
                       ),
                       child: Row(
                         children: [
@@ -150,6 +150,16 @@ class SettingsPage extends StatelessWidget {
                     onTap: () => _showChangePasswordBottomSheet(context, controller, colorScheme),
                     colorScheme: colorScheme,
                   ),
+                  _buildSettingsCard(
+                    icon: Icons.group_add,
+                    title: "المستخدمون",
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => TeamMembersPage(ownerUid: controller.userId),
+                      ),
+                    ),
+                    colorScheme: colorScheme,
+                  ),
                   _buildCustomFieldsHeader(context, controller, colorScheme),
                   _buildCustomFieldsList(controller, colorScheme, context),
                   _buildDangerZone(context, controller, colorScheme),
@@ -175,7 +185,7 @@ class SettingsPage extends StatelessWidget {
         children: [
           CircleAvatar(
             maxRadius: 30,
-            backgroundColor: colorScheme.primary.withOpacity(0.3),
+            backgroundColor: colorScheme.primary.withValues(alpha: 0.3),
             child: Text(
               controller.name.isNotEmpty ? controller.name[0].toUpperCase() : '',
               style: TextStyle(color: colorScheme.onPrimary, fontSize: 25),
@@ -239,13 +249,14 @@ class SettingsPage extends StatelessWidget {
     SettingsController controller,
     ColorScheme colorScheme,
   ) {
+    final BuildContext pageContext = context;
     showModalBottomSheet(
       isScrollControlled: true,
       showDragHandle: true,
       context: context,
       backgroundColor: colorScheme.surface,
       builder: (context) {
-        return Container(
+        return SizedBox(
           width: double.infinity,
           child: SingleChildScrollView(
             padding: EdgeInsets.only(
@@ -296,19 +307,20 @@ class SettingsPage extends StatelessWidget {
                         onPressed: () async {
                           try {
                             await controller.updateUserInfo();
-                            if (context.mounted) Navigator.pop(context);
-                            AwesomeDialog(
-                              context: context,
-                              dialogType: controller.isOffline ? DialogType.info : DialogType.success,
-                              title: controller.isOffline ? 'تم الحفظ محلياً' : 'تم التحديث',
-                              desc: controller.isOffline
+                            if (!context.mounted) return;
+                            Navigator.pop(context);
+                            if (!pageContext.mounted) return;
+                            _showSuccessNotification(
+                              pageContext,
+                              controller.isOffline ? 'تم الحفظ محلياً' : 'تم التحديث',
+                              controller.isOffline
                                   ? 'تم حفظ التغييرات محلياً وسيتم مزامنتها عند عودة الاتصال.'
                                   : 'تم تحديث البيانات بنجاح',
-                              btnOkText: 'حسناً',
-                            ).show();
+                            );
                           } catch (e) {
+                            if (!pageContext.mounted) return;
                             AwesomeDialog(
-                              context: context,
+                              context: pageContext,
                               dialogType: DialogType.error,
                               title: 'خطأ',
                               desc: 'حدث خطأ: $e',
@@ -377,6 +389,7 @@ class SettingsPage extends StatelessWidget {
     SettingsController controller,
     ColorScheme colorScheme,
   ) {
+    final BuildContext pageContext = context;
     showModalBottomSheet(
       showDragHandle: true,
       isScrollControlled: true,
@@ -451,19 +464,20 @@ class SettingsPage extends StatelessWidget {
                                 : () async {
                                     try {
                                       await controller.changePassword();
-                                      if (context.mounted) Navigator.pop(context);
-                                      AwesomeDialog(
-                                        context: context,
-                                        dialogType: DialogType.success,
-                                        title: 'تم التحديث',
-                                        desc: 'تم تغيير كلمة المرور بنجاح',
-                                        btnOkText: 'حسناً',
-                                      ).show();
+                                      if (!context.mounted) return;
+                                      Navigator.pop(context);
+                                      if (!pageContext.mounted) return;
+                                      _showSuccessNotification(
+                                        pageContext,
+                                        'تم التحديث',
+                                        'تم تغيير كلمة المرور بنجاح',
+                                      );
                                       controller.newPasswordController.clear();
                                       controller.confirmPasswordController.clear();
                                     } catch (e) {
+                                      if (!pageContext.mounted) return;
                                       AwesomeDialog(
-                                        context: context,
+                                        context: pageContext,
                                         dialogType: DialogType.error,
                                         title: 'خطأ',
                                         desc: 'حدث خطأ: $e',
@@ -541,14 +555,12 @@ class SettingsPage extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               ElevatedButton(
-                onPressed: controller.isOffline
-                    ? null
-                    : () => _showAddEditCustomFieldBottomSheet(context, controller, colorScheme),
-                child: Icon(Icons.add, color: colorScheme.onPrimary, size: 18),
+                onPressed: () => _showAddEditCustomFieldBottomSheet(context, controller, colorScheme),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: controller.isOffline ? Colors.grey : colorScheme.primary,
+                  backgroundColor: colorScheme.primary,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
+                child: Icon(Icons.add, color: colorScheme.onPrimary, size: 18),
               ),
               Text("حقول مخصصة للأعمال",
                   style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: colorScheme.onSurface)),
@@ -572,6 +584,7 @@ class SettingsPage extends StatelessWidget {
     SettingsController controller,
     ColorScheme colorScheme,
   ) {
+    final BuildContext pageContext = context;
     showModalBottomSheet(
       showDragHandle: true,
       isScrollControlled: true,
@@ -612,7 +625,7 @@ class SettingsPage extends StatelessWidget {
                       Directionality(
                         textDirection: TextDirection.rtl,
                         child: DropdownButtonFormField<String>(
-                          value: controller.selectedFieldType,
+                          initialValue: controller.selectedFieldType,
                           decoration: InputDecoration(
                             focusedBorder: OutlineInputBorder(
                                 borderSide: BorderSide(color: colorScheme.primary, width: 2),
@@ -685,8 +698,8 @@ class SettingsPage extends StatelessWidget {
                                   controller.addOptionToList();
                                 });
                               },
-                              child: Icon(Icons.add),
                               style: ElevatedButton.styleFrom(backgroundColor: colorScheme.primary),
+                              child: Icon(Icons.add),
                             ),
                           ],
                         ),
@@ -746,7 +759,7 @@ class SettingsPage extends StatelessWidget {
                                 controller.toggleRequired(value);
                               });
                             },
-                            activeColor: colorScheme.primary,
+                            activeThumbColor: colorScheme.primary,
                           ),
                         ],
                       ),
@@ -773,19 +786,22 @@ class SettingsPage extends StatelessWidget {
                             onPressed: () async {
                               try {
                                 await controller.addOrUpdateCustomField();
-                                if (context.mounted) Navigator.pop(context);
-                                AwesomeDialog(
-                                  context: context,
-                                  dialogType: DialogType.success,
-                                  title: controller.isEditingField ? 'تم التعديل' : 'تم الإضافة',
-                                  desc: controller.isEditingField
+                                if (!context.mounted) return;
+                                Navigator.pop(context);
+                                if (!pageContext.mounted) return;
+                                _showSuccessNotification(
+                                  pageContext,
+                                  controller.isEditingField
+                                      ? 'تم التعديل'
+                                      : 'تم الإضافة',
+                                  controller.isEditingField
                                       ? 'تم تعديل الحقل بنجاح'
                                       : 'تم إضافة الحقل بنجاح',
-                                  btnOkText: 'حسناً',
-                                ).show();
+                                );
                               } catch (e) {
+                                if (!pageContext.mounted) return;
                                 AwesomeDialog(
-                                  context: context,
+                                  context: pageContext,
                                   dialogType: DialogType.error,
                                   title: 'خطأ',
                                   desc: 'حدث خطأ: $e',
@@ -813,7 +829,7 @@ class SettingsPage extends StatelessWidget {
       padding: EdgeInsets.all(10),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(10),
-        color: colorScheme.primary.withOpacity(0.1),
+        color: colorScheme.primary.withValues(alpha: 0.1),
       ),
       child: Row(
         children: [
@@ -846,9 +862,9 @@ class SettingsPage extends StatelessWidget {
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(10),
         color: colorScheme.surface,
-        boxShadow: [BoxShadow(color: colorScheme.shadow.withOpacity(0.1), spreadRadius: 2, offset: Offset(0, 3))],
+        boxShadow: [BoxShadow(color: colorScheme.shadow.withValues(alpha: 0.1), spreadRadius: 2, offset: Offset(0, 3))],
       ),
-      child: controller.customFieldsList.isEmpty && !controller.isOffline
+      child: controller.customFieldsList.isEmpty
           ? Center(
               child: Padding(
                 padding: EdgeInsets.all(20),
@@ -856,15 +872,7 @@ class SettingsPage extends StatelessWidget {
                     textAlign: TextAlign.center, style: TextStyle(color: colorScheme.onSurfaceVariant)),
               ),
             )
-          : controller.customFieldsList.isEmpty && controller.isOffline
-              ? Center(
-                  child: Padding(
-                    padding: EdgeInsets.all(20),
-                    child: Text("لا توجد حقول مخصصة\nيتطلب إضافة الحقول اتصال بالإنترنت",
-                        textAlign: TextAlign.center, style: TextStyle(color: colorScheme.onSurfaceVariant)),
-                  ),
-                )
-              : Column(
+          : Column(
                   children: controller.customFieldsList.map((field) {
                     return Container(
                       margin: EdgeInsets.only(bottom: 15),
@@ -896,7 +904,7 @@ class SettingsPage extends StatelessWidget {
                                       padding: EdgeInsets.all(5),
                                       decoration: BoxDecoration(
                                           borderRadius: BorderRadius.circular(10),
-                                          color: colorScheme.error.withOpacity(0.1)),
+                                          color: colorScheme.error.withValues(alpha: 0.1)),
                                       child: Text("مطلوب",
                                           style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: colorScheme.error)),
                                     ),
@@ -905,7 +913,7 @@ class SettingsPage extends StatelessWidget {
                                     padding: EdgeInsets.all(5),
                                     decoration: BoxDecoration(
                                         borderRadius: BorderRadius.circular(10),
-                                        color: colorScheme.primary.withOpacity(0.1)),
+                                        color: colorScheme.primary.withValues(alpha: 0.1)),
                                     child: Row(
                                       children: [
                                         Text(_getFieldTypeName(field['fieldType']),
@@ -953,6 +961,21 @@ class SettingsPage extends StatelessWidget {
     );
   }
 
+  // ========== إشعار نجاح قصير (يظهر ثم يختفي تلقائياً) ==========
+  void _showSuccessNotification(BuildContext ctx, String title, String desc) {
+    final dialog = AwesomeDialog(
+      context: ctx,
+      dialogType: DialogType.success,
+      title: title,
+      desc: desc,
+      btnOkText: 'حسناً',
+    );
+    dialog.show();
+    Future.delayed(const Duration(milliseconds: 1500), () {
+      dialog.dismiss();
+    });
+  }
+
   void _showDeleteDialog(
     BuildContext context,
     String fieldId,
@@ -970,14 +993,10 @@ class SettingsPage extends StatelessWidget {
       btnOkOnPress: () async {
         try {
           await controller.deleteCustomField(fieldId);
-          AwesomeDialog(
-            context: context,
-            dialogType: DialogType.success,
-            title: 'تم الحذف',
-            desc: 'تم حذف الحقل بنجاح',
-            btnOkText: 'حسناً',
-          ).show();
+          if (!context.mounted) return;
+          _showSuccessNotification(context, 'تم الحذف', 'تم حذف الحقل بنجاح');
         } catch (e) {
+          if (!context.mounted) return;
           AwesomeDialog(
             context: context,
             dialogType: DialogType.error,
@@ -1045,6 +1064,7 @@ class SettingsPage extends StatelessWidget {
             );
           }
         } catch (e) {
+          if (!context.mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('حدث خطأ أثناء تسجيل الخروج: $e'), backgroundColor: colorScheme.error),
           );

@@ -1,11 +1,21 @@
 // lib/views/expense_view.dart
 import 'package:fkra/controller/expense_controller.dart';
+import 'package:fkra/model/team_member_model.dart';
+import 'package:fkra/services/member_session_service.dart';
+import 'package:fkra/view/widgets/delegated_accounts_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:awesome_dialog/awesome_dialog.dart';
 import 'package:provider/provider.dart';
 class ExpensesPage extends StatelessWidget {
   final String userId;
   const ExpensesPage({super.key, required this.userId});
+
+  bool _canCreateExpense() =>
+      MemberSessionService.instance.canCreate(TeamPermissions.expenses);
+  bool _canUpdateExpense() =>
+      MemberSessionService.instance.canUpdate(TeamPermissions.expenses);
+  bool _canDeleteExpense() =>
+      MemberSessionService.instance.canDelete(TeamPermissions.expenses);
 
   @override
   Widget build(BuildContext context) {
@@ -35,7 +45,7 @@ class ExpensesPage extends StatelessWidget {
           return Scaffold(
             appBar: AppBar(
               title: Text(
-                "تساهيل",
+                "تسهيل",
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   color: colorScheme.primary,
@@ -45,6 +55,25 @@ class ExpensesPage extends StatelessWidget {
               centerTitle: true,
               backgroundColor: colorScheme.surface,
               elevation: 0,
+              leadingWidth: 100,
+              leading: TextButton(
+                onPressed: () {
+                  DelegatedAccountsDialog.show(context, onAccountSwitched: () {
+                    controller.syncNow();
+                  });
+                },
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.supervisor_account_rounded, size: 18, color: colorScheme.primary),
+                    const SizedBox(width: 2),
+                    Text(
+                      'المفوضين',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: colorScheme.primary),
+                    ),
+                  ],
+                ),
+              ),
               actions: [
                 IconButton(
                   onPressed: controller.isOffline
@@ -82,7 +111,7 @@ class ExpensesPage extends StatelessWidget {
                       child: Container(
                         padding: EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                         decoration: BoxDecoration(
-                          color: Colors.orange.withOpacity(0.2),
+                          color: Colors.orange.withValues(alpha: 0.2),
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Row(
@@ -107,7 +136,8 @@ class ExpensesPage extends StatelessWidget {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      ElevatedButton.icon(
+                      if (_canCreateExpense())
+                        ElevatedButton.icon(
                         onPressed: () {
                           controller.resetForm();
                           _showAddEditExpenseBottomSheet(context, controller, colorScheme);
@@ -137,9 +167,9 @@ class ExpensesPage extends StatelessWidget {
                     margin: EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                     padding: EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: Colors.orange.withOpacity(0.1),
+                      color: Colors.orange.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                      border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
                     ),
                     child: Row(
                       children: [
@@ -204,7 +234,7 @@ class ExpensesPage extends StatelessWidget {
                           Container(
                             padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(
-                              color: Colors.orange.withOpacity(0.2),
+                              color: Colors.orange.withValues(alpha: 0.2),
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Text(
@@ -264,6 +294,9 @@ class ExpensesPage extends StatelessWidget {
       {'label': 'مواد ومستلزمات', 'value': 'مواد ومستلزمات'},
       {'label': 'نقل ومواصلات', 'value': 'نقل ومواصلات'},
       {'label': 'اكل ومشروبات', 'value': 'اكل ومشروبات'},
+      {'label': 'أجور', 'value': 'أجور'},
+      {'label': 'سلف', 'value': 'سلف'},
+      {'label': 'عمال', 'value': 'عمال'},
       {'label': 'اخرى', 'value': 'اخرى'},
     ];
 
@@ -311,10 +344,21 @@ class ExpensesPage extends StatelessWidget {
     }
 
     Color categoryColor = Colors.green;
-    if (category == 'ادوات ومعدات') categoryColor = Colors.blue;
-    else if (category == 'نقل ومواصلات') categoryColor = Colors.orange;
-    else if (category == 'اكل ومشروبات') categoryColor = Colors.deepOrange;
-    else if (category == 'اخرى') categoryColor = Colors.purple;
+    if (category == 'ادوات ومعدات') {
+      categoryColor = Colors.blue;
+    } else if (category == 'نقل ومواصلات') {
+      categoryColor = Colors.orange;
+    } else if (category == 'اكل ومشروبات') {
+      categoryColor = Colors.deepOrange;
+    } else if (category == 'أجور') {
+      categoryColor = Colors.teal;
+    } else if (category == 'سلف') {
+      categoryColor = Colors.indigo;
+    } else if (category == 'عمال') {
+      categoryColor = Colors.amber;
+    } else if (category == 'اخرى') {
+      categoryColor = Colors.purple;
+    }
 
     return Card(
       margin: EdgeInsets.all(10),
@@ -329,52 +373,58 @@ class ExpensesPage extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     if (!isSynced)
                       Container(
                         margin: EdgeInsets.only(left: 8),
                         padding: EdgeInsets.all(4),
                         decoration: BoxDecoration(
-                          color: Colors.orange.withOpacity(0.2),
+                          color: Colors.orange.withValues(alpha: 0.2),
                           shape: BoxShape.circle,
                         ),
                         child: Icon(Icons.sync_problem, color: Colors.orange, size: 16),
                       ),
-                    IconButton(
-                      onPressed: () {
-                        controller.loadExpenseForEditing(expense);
-                        _showAddEditExpenseBottomSheet(context, controller, colorScheme);
-                      },
-                      icon: Icon(Icons.edit, color: colorScheme.primary),
-                      tooltip: 'تعديل المصروف',
-                    ),
-                    IconButton(
-                      onPressed: () => _confirmDelete(context, expense['id'], description, controller),
-                      icon: Icon(Icons.delete, color: colorScheme.error),
-                      tooltip: 'حذف المصروف',
-                    ),
+                    if (_canUpdateExpense())
+                      IconButton(
+                        onPressed: () {
+                          controller.loadExpenseForEditing(expense);
+                          _showAddEditExpenseBottomSheet(context, controller, colorScheme);
+                        },
+                        icon: Icon(Icons.edit, color: colorScheme.primary),
+                        tooltip: 'تعديل المصروف',
+                      ),
+                    if (_canDeleteExpense())
+                      IconButton(
+                        onPressed: () => _confirmDelete(context, expense['id'], description, controller),
+                        icon: Icon(Icons.delete, color: colorScheme.error),
+                        tooltip: 'حذف المصروف',
+                      ),
                   ],
                 ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      description,
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17, color: colorScheme.onSurface),
-                    ),
-                    SizedBox(height: 5),
-                    Container(
-                      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: categoryColor.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(12),
+                Flexible(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        description,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17, color: colorScheme.onSurface),
                       ),
-                      child: Text(
-                        category,
-                        style: TextStyle(color: categoryColor, fontWeight: FontWeight.bold, fontSize: 12),
+                      SizedBox(height: 5),
+                      Container(
+                        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: categoryColor.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          category,
+                          style: TextStyle(color: categoryColor, fontWeight: FontWeight.bold, fontSize: 12),
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
@@ -392,6 +442,56 @@ class ExpensesPage extends StatelessWidget {
                 ),
               ],
             ),
+            if ((expense['createdByLabel'] ?? '').toString().isNotEmpty ||
+                (expense['lastModifiedByLabel'] ?? '')
+                    .toString()
+                    .isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: Wrap(
+                    alignment: WrapAlignment.end,
+                    spacing: 12,
+                    runSpacing: 4,
+                    children: [
+                      if ((expense['createdByLabel'] ?? '')
+                          .toString()
+                          .isNotEmpty)
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.person_add_alt_1,
+                                size: 13, color: colorScheme.primary),
+                            const SizedBox(width: 4),
+                            Text(
+                              'أضيف بواسطة: ${expense['createdByLabel']}',
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  color: colorScheme.onSurfaceVariant),
+                            ),
+                          ],
+                        ),
+                      if ((expense['lastModifiedByLabel'] ?? '')
+                          .toString()
+                          .isNotEmpty)
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.edit, size: 13, color: Colors.orange),
+                            const SizedBox(width: 4),
+                            Text(
+                              'آخر تعديل: ${expense['lastModifiedByLabel']}',
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  color: colorScheme.onSurfaceVariant),
+                            ),
+                          ],
+                        ),
+                    ],
+                  ),
+                ),
+              ),
           ],
         ),
       ),
@@ -417,6 +517,8 @@ class ExpensesPage extends StatelessWidget {
               width: double.infinity,
               height: 600,
               child: SingleChildScrollView(
+                padding: EdgeInsets.only(
+                    bottom: MediaQuery.of(context).viewInsets.bottom),
                 child: Form(
                   key: controller.formKey,
                   child: Column(
@@ -471,12 +573,36 @@ class ExpensesPage extends StatelessWidget {
                           SizedBox(width: 15),
                           ElevatedButton(
                             onPressed: () async {
+                              final messenger = ScaffoldMessenger.of(context);
                               if (controller.isEditing) {
-                                await controller.editExpense(context);
+                                final bool ok =
+                                    await controller.editExpense(context);
+                                if (ok && context.mounted) {
+                                  Navigator.pop(context);
+                                  messenger.showSnackBar(
+                                    SnackBar(
+                                      content: Text(controller.isOffline
+                                          ? 'تم تعديل المصروف محلياً وسيتم مزامنته تلقائياً عند عودة الاتصال'
+                                          : 'تم تعديل المصروف بنجاح'),
+                                      backgroundColor: Colors.green,
+                                    ),
+                                  );
+                                }
                               } else {
-                                await controller.addExpense(context);
+                                final bool ok =
+                                    await controller.addExpense(context);
+                                if (ok && context.mounted) {
+                                  Navigator.pop(context);
+                                  messenger.showSnackBar(
+                                    SnackBar(
+                                      content: Text(controller.isOffline
+                                          ? 'تم حفظ المصروف محلياً وسيتم مزامنته تلقائياً عند عودة الاتصال'
+                                          : 'تم إضافة المصروف بنجاح'),
+                                      backgroundColor: Colors.green,
+                                    ),
+                                  );
+                                }
                               }
-                              if (context.mounted) Navigator.pop(context);
                             },
                             style: ElevatedButton.styleFrom(backgroundColor: colorScheme.primary),
                             child: Text(
@@ -565,7 +691,7 @@ class ExpensesPage extends StatelessWidget {
         Directionality(
           textDirection: TextDirection.rtl,
           child: DropdownButtonFormField<String>(
-            value: controller.selectedValue ?? "اخرى",
+            initialValue: controller.selectedValue ?? "اخرى",
             decoration: InputDecoration(
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
               enabledBorder: OutlineInputBorder(

@@ -1,33 +1,38 @@
-// lib/models/business_model.dart
-import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:path/path.dart' as path;
-import 'package:shared_preferences/shared_preferences.dart';
+// ignore_for_file: avoid_print
+// lib/model/business_model.dart
+// ملاحظة معمارية: هذا الملف أصبح واجهة تخويل (Facade) رفيعة لدعم التوافق
+// العكسي مع المتصلين القائمين (business_controller / report_controller).
+//
+// التنفيذ الفعلي انتقل إلى features/business/data:
+//   - BusinessRemoteDataSource (كل اتصالات Firestore)
+//   - BusinessLocalDataSource  (SQLite + ترحيل JSON + كاش الحقول المخصصة)
+//   - BusinessRepositoryImpl   (تنسيق المزامنة والتحميل والحفظ)
+//   - BusinessRepository (العقد في domain)
+//
+// كل استدعاء هنا مجرد تمرير أو وضع حالة محلية (localBusinesses/
+// localTransactions) — لا يوجد أي منطق Firestore/SQLite/مزامنة هنا.
+import 'package:fkra/core/network/connectivity_service.dart';
+import 'package:fkra/features/business/data/repositories/business_repository_impl.dart';
+import 'package:fkra/features/business/domain/repositories/business_repository.dart';
 
 class BusinessModel {
-  final FirebaseFirestore firestore = FirebaseFirestore.instance;
   final String userId;
+  final BusinessRepository _repo;
 
-  File? _businessesFile;
   List<Map<String, dynamic>> _localBusinesses = [];
+  List<Map<String, dynamic>> _localTransactions = [];
 
-  BusinessModel({required this.userId});
+  BusinessModel({required this.userId}) : _repo = BusinessRepositoryImpl(userId: userId);
+
+  /// تفويض على مستوى السجل: قائمة معرفات الأعمال المسموح بها (فارغة = الكل).
+  void setScopedBusinessIds(List<String> ids) => _repo.setScopedBusinessIds(ids);
 
   // ========== التخزين المحلي ==========
   Future<void> initStorage() async {
     try {
-      final Directory appDir = await getApplicationDocumentsDirectory();
-      final String businessesDirPath = path.join(appDir.path, 'businesses_data');
-      final Directory businessesDir = Directory(businessesDirPath);
-      if (!await businessesDir.exists()) {
-        await businessesDir.create(recursive: true);
-      }
-      final String filePath = path.join(businessesDirPath, 'businesses_$userId.json');
-      _businessesFile = File(filePath);
-      await loadLocalBusinesses();
+      await _repo.initStorage();
+      _localBusinesses = await _repo.loadLocalBusinesses();
+      _localTransactions = await _repo.loadLocalTransactions();
     } catch (e) {
       print('خطأ في تهيئة التخزين: $e');
       rethrow;
@@ -35,242 +40,72 @@ class BusinessModel {
   }
 
   Future<void> loadLocalBusinesses() async {
-    if (_businessesFile == null) return;
-    try {
-      if (await _businessesFile!.exists()) {
-        final String jsonString = await _businessesFile!.readAsString();
-        final List<dynamic> jsonList = json.decode(jsonString);
-        _localBusinesses = jsonList.cast<Map<String, dynamic>>();
-      } else {
-        _localBusinesses = [];
-      }
-    } catch (e) {
-      print('خطأ في تحميل الأعمال: $e');
-      _localBusinesses = [];
-    }
+    _localBusinesses = await _repo.loadLocalBusinesses();
   }
 
-  Future<void> saveBusinessesToFile(List<Map<String, dynamic>> businesses) async {
-    if (_businessesFile == null) return;
-    try {
-      final String jsonString = json.encode(businesses);
-      await _businessesFile!.writeAsString(jsonString);
-    } catch (e) {
-      print('خطأ في حفظ الأعمال: $e');
-      rethrow;
-    }
-  }
+  Future<void> saveBusinessesToFile(List<Map<String, dynamic>> businesses) =>
+      _repo.saveBusinessesToFile(businesses);
 
   List<Map<String, dynamic>> get localBusinesses => _localBusinesses;
 
-  // ========== الاتصال بالإنترنت ==========
-   Future<bool> hasInternet() async {
-    try {
-      final result = await InternetAddress.lookup('google.com')
-          .timeout(Duration(seconds: 5));
-      return result.isNotEmpty && result[0].rawAddress.isNotEmpty;
-    } catch (_) {
-      return false;
-    }
+  // ========== تخزين الحركات المالية محلياً ==========
+  Future<void> loadLocalTransactions() async {
+    _localTransactions = await _repo.loadLocalTransactions();
   }
+
+  Future<void> saveTransactionsToFile(
+          List<Map<String, dynamic>> transactions) =>
+      _repo.saveTransactionsToFile(transactions);
+
+  List<Map<String, dynamic>> get localTransactions => _localTransactions;
+
+  // ========== الاتصال بالإنترنت ==========
+  Future<bool> hasInternet() => ConnectivityService.hasInternet();
 
   // ========== المزامنة مع Firestore ==========
-  Future<void> syncWithFirestore(List<Map<String, dynamic>> businesses) async {
-    if (_businessesFile == null) return;
-    final bool internetAvailable = await hasInternet();
-    if (!internetAvailable) return;
+  Future<void> syncWithFirestore(List<Map<String, dynamic>> businesses) =>
+      _repo.syncWithFirestore(businesses);
 
-    try {
-      // 1. رفع الأعمال غير المتزامنة
-      final List<Map<String, dynamic>> unsynced =
-          businesses.where((b) => b['synced'] == 0).toList();
-      for (var business in unsynced) {
-        await _uploadBusiness(business);
-        // تحديث حالة المزامنة
-        final index = businesses.indexWhere((e) => e['id'] == business['id']);
-        if (index != -1) businesses[index]['synced'] = 1;
-      }
-      if (unsynced.isNotEmpty) await saveBusinessesToFile(businesses);
-
-      // 2. تحميل الأعمال الجديدة من السحاب
-      final lastSyncTime = await _getLastSyncTime();
-      final QuerySnapshot cloudBusinesses = await firestore
-          .collection('users')
-          .doc(userId)
-          .collection('businesses')
-          .where('createdAt', isGreaterThan: lastSyncTime)
-          .get();
-
-      int addedCount = 0;
-      for (var doc in cloudBusinesses.docs) {
-        final data = doc.data() as Map<String, dynamic>;
-        final id = doc.id;
-        if (!businesses.any((e) => e['id'] == id)) {
-          final newBusiness = {
-            'id': id,
-            'name': data['name'],
-            'description': data['description'],
-            'amount': data['amount'],
-            'status': data['status'],
-            'date': data['date'] is Timestamp
-                ? (data['date'] as Timestamp).toDate().toIso8601String()
-                : data['date'].toString(),
-            'customFields': data['customFields'] ?? {},
-            'synced': 1,
-            'createdAt': data['createdAt'] != null && data['createdAt'] is Timestamp
-                ? (data['createdAt'] as Timestamp).toDate().toIso8601String()
-                : DateTime.now().toIso8601String(),
-          };
-          businesses.add(newBusiness);
-          addedCount++;
-        }
-      }
-
-      // ترتيب حسب التاريخ
-      businesses.sort((a, b) {
-        try {
-          DateTime dateA = DateTime.parse(a['date']);
-          DateTime dateB = DateTime.parse(b['date']);
-          return dateB.compareTo(dateA);
-        } catch (_) {
-          return 0;
-        }
-      });
-
-      if (addedCount > 0) await saveBusinessesToFile(businesses);
-      await _saveLastSyncTime(DateTime.now().toIso8601String());
-
-      return;
-    } catch (e) {
-      print('خطأ في المزامنة: $e');
-      rethrow;
-    }
-  }
-
-  Future<void> _uploadBusiness(Map<String, dynamic> business) async {
-    final id = business['id'];
-    final docRef = firestore
-        .collection('users')
-        .doc(userId)
-        .collection('businesses')
-        .doc(id);
-
-    Map<String, dynamic> firestoreData = Map.from(business);
-    firestoreData.remove('id');
-    firestoreData.remove('synced');
-    firestoreData.remove('localId');
-
-    if (firestoreData['date'] is String) {
-      firestoreData['date'] = Timestamp.fromDate(DateTime.parse(firestoreData['date']));
-    }
-
-    final docSnapshot = await docRef.get();
-    if (!docSnapshot.exists) {
-      await docRef.set(firestoreData);
-    } else {
-      await docRef.update({
-        ...firestoreData,
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-    }
-  }
-
-  Future<String> _getLastSyncTime() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('last_sync_businesses_$userId') ?? '2000-01-01';
-  }
-
-  Future<void> _saveLastSyncTime(String time) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('last_sync_businesses_$userId', time);
-  }
+  Future<void> syncTransactionsWithFirestore(
+          List<Map<String, dynamic>> transactions,
+          List<Map<String, dynamic>> businesses) =>
+      _repo.syncTransactionsWithFirestore(transactions, businesses);
 
   // ========== الحقول المخصصة ==========
-  Future<List<Map<String, dynamic>>> fetchCustomFields() async {
-    final bool internetAvailable = await hasInternet();
-    List<Map<String, dynamic>> fields = [];
-
-    if (internetAvailable) {
-      try {
-        QuerySnapshot snapshot = await firestore
-            .collection('users')
-            .doc(userId)
-            .collection('custom_fields')
-            .orderBy('createdAt', descending: false)
-            .get();
-        fields = snapshot.docs.map((doc) {
-          return {'id': doc.id, ...doc.data() as Map<String, dynamic>};
-        }).toList();
-        await _saveCustomFieldsLocally(fields);
-      } catch (e) {
-        print('خطأ في جلب الحقول: $e');
-        fields = await _loadCustomFieldsLocally();
-      }
-    } else {
-      fields = await _loadCustomFieldsLocally();
-    }
-    return fields;
-  }
-
-  Future<void> _saveCustomFieldsLocally(List<Map<String, dynamic>> fields) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('custom_fields_$userId', jsonEncode(fields));
-    } catch (e) {
-      print('خطأ في حفظ الحقول محلياً: $e');
-    }
-  }
-
-  Future<List<Map<String, dynamic>>> _loadCustomFieldsLocally() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final cached = prefs.getString('custom_fields_$userId');
-      if (cached != null) {
-        final List<dynamic> list = jsonDecode(cached);
-        return list.cast<Map<String, dynamic>>();
-      }
-    } catch (e) {
-      print('خطأ في تحميل الحقول من الملف: $e');
-    }
-    return [];
-  }
+  Future<List<Map<String, dynamic>>> fetchCustomFields() =>
+      _repo.fetchCustomFields();
 
   // ========== حذف من السحاب ==========
-  Future<void> deleteBusinessFromFirestore(String businessId) async {
-    await firestore
-        .collection('users')
-        .doc(userId)
-        .collection('businesses')
-        .doc(businessId)
-        .delete();
-  }
+  Future<void> deleteBusinessFromFirestore(String businessId) =>
+      _repo.deleteBusinessFromFirestore(businessId);
+
+  Future<void> deleteBusinessTransactionsFromFirestore(String workId) =>
+      _repo.deleteBusinessTransactionsFromFirestore(workId);
+
+  Future<void> deleteTransactionFromFirestore(
+          String workId, String transactionId) =>
+      _repo.deleteTransactionFromFirestore(workId, transactionId);
+
+  // ========== تحديث الملخص المالي في السحاب ==========
+  Future<void> updateBusinessSummaryFirestore(
+    String workId, {
+    required int totalPaid,
+    required int totalExpenses,
+    required int remaining,
+  }) =>
+      _repo.updateBusinessSummaryFirestore(
+        workId,
+        totalPaid: totalPaid,
+        totalExpenses: totalExpenses,
+        remaining: remaining,
+      );
 
   // ========== حفظ أو تحديث في السحاب ==========
-  Future<void> saveBusinessToFirestore(Map<String, dynamic> business, bool isEditing) async {
-    final id = business['id'];
-    final docRef = firestore
-        .collection('users')
-        .doc(userId)
-        .collection('businesses')
-        .doc(id);
+  Future<void> saveBusinessToFirestore(
+          Map<String, dynamic> business, bool isEditing) =>
+      _repo.saveBusinessToFirestore(business, isEditing);
 
-    Map<String, dynamic> firestoreData = Map.from(business);
-    firestoreData.remove('id');
-    firestoreData.remove('synced');
-    if (firestoreData['date'] is String) {
-      firestoreData['date'] = Timestamp.fromDate(DateTime.parse(firestoreData['date']));
-    }
-
-    if (isEditing) {
-      await docRef.update({
-        ...firestoreData,
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-    } else {
-      await docRef.set({
-        ...firestoreData,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-    }
-  }
+  // ========== رفع حركة مالية واحدة إلى السحاب ==========
+  Future<void> uploadTransactionToFirestore(Map<String, dynamic> tx) =>
+      _repo.uploadTransactionToFirestore(tx);
 }

@@ -1,7 +1,12 @@
-// lib/controllers/login_controller.dart
-import 'package:firebase_auth/firebase_auth.dart';
+// ignore_for_file: avoid_print
+import 'package:fkra/admin/services/firebase_usage_tracker.dart';
 import 'package:fkra/model/login_model.dart';
+import 'package:fkra/services/activity_service.dart';
+import 'package:fkra/services/member_session_service.dart';
+import 'package:fkra/services/analytics_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
 class LoginController extends ChangeNotifier {
   final LoginModel _model = LoginModel();
@@ -9,6 +14,17 @@ class LoginController extends ChangeNotifier {
   // حالة الواجهة
   bool isLoading = false;
   bool isOffline = false;
+
+  // حالة التحقق من البريد
+  bool _emailNotVerified = false;
+  bool get emailNotVerified => _emailNotVerified;
+
+  // حالة إعادة إرسال رسالة التحقق
+  bool _isResendingVerification = false;
+  bool get isResendingVerification => _isResendingVerification;
+  String? _verificationMessage;
+  String? get verificationMessage => _verificationMessage;
+  DateTime? _lastVerificationSend;
 
   // متحكمات الحقول
   final TextEditingController emailController = TextEditingController();
@@ -43,30 +59,48 @@ class LoginController extends ChangeNotifier {
 
     String? userId;
     String? email;
+    final List<int> processedIndexes = [];
 
-    for (var loginData in pendingLogins) {
+    for (var i = 0; i < pendingLogins.length; i++) {
+      final loginData = pendingLogins[i];
       try {
-        User? user = await _model.loginWithEmailAndPassword(
+        final user = await _model.loginWithEmailAndPassword(
           loginData['email'],
           loginData['password'],
         );
         if (user != null) {
-          userId = user.uid;
-          email = loginData['email'];
-          await _model.saveSessionLocally(userId, email!);
-          break;
+          await user.reload();
+          final updatedUser = user;
+          if (updatedUser.emailVerified) {
+            // فحص الحظر مثل المسار الإلكتروني — لا ندخل بحساب موقوف
+            final blocked = await _model.isAccountBlocked(updatedUser.uid);
+            if (blocked) {
+              await _model.signOut();
+            } else {
+              userId = updatedUser.uid;
+              email = loginData['email'];
+              await _model.saveSessionLocally(userId, email!);
+            }
+          }
         }
       } catch (e) {
         print('خطأ في مزامنة تسجيل الدخول: $e');
       }
+      // المحاولة اكتملت (نجحت أو فشلت نهائياً) → لا تُعاد محاولتها مستقبلاً
+      processedIndexes.add(i);
     }
 
-    await _model.clearPendingLogins();
+    // إبقاء ما لم تُعالج فقط — لا تُمسح بقية المحاولات (إصلاح لفقدان بيانات).
+    if (processedIndexes.isNotEmpty) {
+      final remaining = <Map<String, dynamic>>[];
+      for (var i = 0; i < pendingLogins.length; i++) {
+        if (!processedIndexes.contains(i)) remaining.add(pendingLogins[i]);
+      }
+      await _model.savePendingLogins(remaining);
+    }
 
     if (userId != null && email != null) {
       // سيتم التعامل مع نجاح المزامنة في الـ View
-      // نمرر النتيجة عبر notifyListeners أو نستخدم callback
-      // سنستخدم خاصية لإعلام الـ View
       _pendingSyncSuccess = userId;
     }
     notifyListeners();
@@ -111,6 +145,8 @@ class LoginController extends ChangeNotifier {
     }
 
     isLoading = true;
+    _emailNotVerified = false;
+    _verificationMessage = null;
     notifyListeners();
 
     final bool hasInternet = await _model.hasInternet();
@@ -128,20 +164,206 @@ class LoginController extends ChangeNotifier {
     }
 
     // تسجيل الدخول عبر الإنترنت
-    User? user = await _model.loginWithEmailAndPassword(
+    final user = await _model.loginWithEmailAndPassword(
       emailController.text.trim(),
       passwordController.text.trim(),
     );
 
-    isLoading = false;
-    notifyListeners();
-
     if (user != null) {
-      await _model.saveSessionLocally(user.uid, emailController.text.trim());
-      return user.uid;
+      // إعادة تحميل بيانات المستخدم للحصول على أحدث حالة emailVerified
+      await user.reload();
+      final updatedUser = user;
+
+      // حسم الجلسة كمالك أو كمستخدم تابع فور نجاح المصادقة
+        await MemberSessionService.instance.resolveForCurrentUser();
+        final session = MemberSessionService.instance;
+
+        if (session.isSubUser) {
+          // الحساب الموقوف أو المحذوف على مستوى العضوية ممنوع من الدخول
+          final member = session.member;
+          if (member != null && member.status != 'active') {
+            await _model.signOut();
+            isLoading = false;
+            notifyListeners();
+            return 'account_blocked';
+          }
+          await _model.saveSessionLocally(
+              updatedUser.uid, updatedUser.email ?? emailController.text.trim());
+          isLoading = false;
+          notifyListeners();
+          await ActivityService.record(
+              userId: updatedUser.uid, isLogin: true, method: 'email');
+          await AnalyticsService.instance.logLogin(method: 'email');
+          FirebaseUsageTracker.instance.recordEmailLogin();
+          return updatedUser.uid;
+        }
+
+        // المستخدم مالك للحساب
+        if (updatedUser.emailVerified) {
+          final blocked = await _model.isAccountBlocked(updatedUser.uid);
+          if (blocked) {
+            await _model.signOut();
+            isLoading = false;
+            notifyListeners();
+            return 'account_blocked';
+          }
+          await _model.saveSessionLocally(
+              updatedUser.uid, updatedUser.email ?? emailController.text.trim());
+          isLoading = false;
+          notifyListeners();
+          await ActivityService.record(
+              userId: updatedUser.uid, isLogin: true, method: 'email');
+          await AnalyticsService.instance.logLogin(method: 'email');
+          FirebaseUsageTracker.instance.recordEmailLogin();
+          return updatedUser.uid;
+        } else {
+          // البريد غير موثق وهو مالك → إرسال رسالة تحقق والانتقال لشاشة التحقق
+          _emailNotVerified = true;
+          _verificationMessage = null;
+          final sent = await _model.sendVerificationEmail();
+          if (sent) {
+            _verificationMessage = 'تم إرسال رسالة التحقق إلى بريدك الإلكتروني';
+          }
+          isLoading = false;
+          notifyListeners();
+          return 'email_not_verified';
+        }
     } else {
+      // الحساب معطّل على مستوى Firebase Auth (إيقاف من لوحة المدير):
+      // نعرض رسالة الإيقاف بدل خطأ عام.
+      if (_model.lastAuthErrorCode == 'user-disabled') {
+        await _model.signOut();
+        isLoading = false;
+        notifyListeners();
+        return 'account_blocked';
+      }
+      isLoading = false;
+      notifyListeners();
       return 'login_failed';
     }
+  }
+
+  // ========== تسجيل الدخول بواسطة Google ==========
+  Future<String?> handleGoogleLogin(BuildContext context) async {
+    if (isLoading) return null;
+
+    isLoading = true;
+    notifyListeners();
+
+    try {
+      final GoogleSignIn googleSignIn = GoogleSignIn();
+
+      final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
+
+      if (googleUser == null) {
+        // المستخدم ألغى عملية تسجيل الدخول
+        isLoading = false;
+        notifyListeners();
+        return 'google_cancelled';
+      }
+
+      final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+
+      final user = await _model.signInWithGoogle(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+
+      if (user != null) {
+        // فحص ما إذا كان الحساب معلّقاً من لوحة المدير
+        final blocked = await _model.isAccountBlocked(user.uid);
+        if (blocked) {
+          await _model.signOut();
+          isLoading = false;
+          notifyListeners();
+          return 'account_blocked';
+        }
+        // حسابات Google تعتبر بريدها موثقاً من مزود Google
+        // السماح بالدخول مباشرة دون فحص emailVerified
+        // تعبئة المعلومات المتوفرة من Google (الاسم/البريد/الصورة) في بروفايل
+        // المستخدم كي لا تظهر الإعدادات "غير محدد"
+        await _model.seedProfileFromGoogle(
+          uid: user.uid,
+          displayName: googleUser.displayName,
+          email: googleUser.email,
+          photoURL: googleUser.photoUrl ?? user.photoURL,
+        );
+        await _model.saveSessionLocally(user.uid, user.email ?? '');
+        isLoading = false;
+        notifyListeners();
+        await ActivityService.record(userId: user.uid, isLogin: true, method: 'google');
+        await AnalyticsService.instance.logLogin(method: 'google');
+        FirebaseUsageTracker.instance.recordGoogleLogin();
+        return user.uid;
+      } else {
+        isLoading = false;
+        notifyListeners();
+        return 'login_failed';
+      }
+    } on PlatformException catch (e) {
+      print('خطأ المنصة أثناء تسجيل الدخول بـ Google: ${e.message}');
+      isLoading = false;
+      notifyListeners();
+      return 'google_error';
+    } catch (e) {
+      // كان يقابل FirebaseAuthException سابقاً: نفحص كود الخطأ المخزَّن من
+      // طبقة البيانات (مثل user-disabled) ونعرض رسالة الإيقاف المناسبة.
+      print('خطأ أثناء تسجيل الدخول بـ Google: $e');
+      if (_model.lastAuthErrorCode == 'user-disabled') {
+        await _model.signOut();
+        isLoading = false;
+        notifyListeners();
+        return 'account_blocked';
+      }
+      isLoading = false;
+      notifyListeners();
+      return 'google_error';
+    }
+  }
+
+  // ========== إعادة إرسال رسالة التحقق ==========
+  Future<void> resendEmailVerification() async {
+    // منع إعادة الإرسال بشكل متكرر (حد أدنى 30 ثانية بين كل محاولتين)
+    if (_lastVerificationSend != null &&
+        DateTime.now().difference(_lastVerificationSend!) < const Duration(seconds: 30)) {
+      _verificationMessage = 'يرجى الانتظار قليلاً قبل إعادة إرسال رسالة التحقق';
+      notifyListeners();
+      return;
+    }
+
+    _isResendingVerification = true;
+    _verificationMessage = null;
+    notifyListeners();
+
+    final bool success = await _model.resendEmailVerification();
+
+    _isResendingVerification = false;
+    _lastVerificationSend = DateTime.now();
+    _verificationMessage = success
+        ? 'تم إرسال رسالة التحقق إلى بريدك الإلكتروني'
+        : 'حدث خطأ أثناء إرسال رسالة التحقق. حاول مرة أخرى.';
+    notifyListeners();
+  }
+
+  // ========== فحص ما إذا تم التحقق من البريد ==========
+  Future<bool> checkEmailVerified() async {
+    final bool isVerified = await _model.reloadUser();
+
+    if (isVerified) {
+      FirebaseUsageTracker.instance.recordVerification();
+      _emailNotVerified = false;
+      _verificationMessage = null;
+    }
+    notifyListeners();
+    return isVerified;
+  }
+
+  // ========== تسجيل الخروج ==========
+  Future<void> signOut() async {
+    await _model.signOut();
+    _emailNotVerified = false;
+    _verificationMessage = null;
+    notifyListeners();
   }
 
   // ========== تبديل رؤية كلمة المرور ==========

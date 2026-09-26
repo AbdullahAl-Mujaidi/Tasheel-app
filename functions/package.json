@@ -1,0 +1,18 @@
+{
+  "name": "functions",
+  "description": "Cloud Functions for Tasahel Admin Panel",
+  "engines": {
+    "node": "20"
+  },
+  "main": "index.js",
+  "scripts": {
+    "bootstrap": "node scripts/bootstrap_admin.js",
+    "set-password": "node scripts/set_admin_password.js"
+  },
+  "dependencies": {
+    "@google-cloud/monitoring": "^3.0.5",
+    "firebase-admin": "^12.1.0",
+    "firebase-functions": "^5.0.0"
+  },
+  "private": true
+}

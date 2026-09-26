@@ -1,26 +1,36 @@
 {
   "project_info": {
-    "project_number": "35492176424",
-    "project_id": "tashel-a589d",
-    "storage_bucket": "tashel-a589d.firebasestorage.app"
+    "project_number": "854204491835",
+    "project_id": "tasheel-e4d47",
+    "storage_bucket": "tasheel-e4d47.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:35492176424:android:bcd049064a4ae5e6418b1d",
+        "mobilesdk_app_id": "1:854204491835:android:d2fea96b2bc290cd94141e",
         "android_client_info": {
           "package_name": "com.example.fkra"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "854204491835-379eu4ff2r0jbfjifhuirc9qvbcq2o56.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
-          "current_key": "AIzaSyABWa0LjFrKBQkMSMxPX5yauH6axbOpddk"
+          "current_key": "AIzaSyArRmPcSATyLxmL-CwNiDjZerK0U3-WIFw"
         }
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "854204491835-379eu4ff2r0jbfjifhuirc9qvbcq2o56.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }

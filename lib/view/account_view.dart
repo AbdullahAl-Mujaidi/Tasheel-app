@@ -38,7 +38,7 @@ class Accounts extends StatelessWidget {
                       child: Container(
                         padding: EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                         decoration: BoxDecoration(
-                          color: Colors.orange.withOpacity(0.2),
+                          color: Colors.orange.withValues(alpha: 0.2),
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Row(
@@ -70,9 +70,9 @@ class Accounts extends StatelessWidget {
                             margin: EdgeInsets.only(bottom: 20),
                             padding: EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              color: Colors.orange.withOpacity(0.1),
+                              color: Colors.orange.withValues(alpha: 0.1),
                               borderRadius: BorderRadius.circular(10),
-                              border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                              border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
                             ),
                             child: Row(
                               children: [
@@ -105,7 +105,7 @@ class Accounts extends StatelessWidget {
                           label: "اسم النشاط التجاري *",
                           controller: controller.businessNameController,
                           validator: controller.validateBusinessName,
-                          hintText: 'مثال : مؤسسة تساهيل',
+                          hintText: 'مثال : مؤسسة تسهيل',
                           icon: Icons.business_outlined,
                           colorScheme: colorScheme,
                         ),
@@ -238,7 +238,7 @@ class Accounts extends StatelessWidget {
                 ),
                 if (controller.isLoading)
                   Container(
-                    color: Colors.black.withOpacity(0.5),
+                    color: Colors.black.withValues(alpha: 0.5),
                     child: Center(
                       child: Card(
                         elevation: 5,
