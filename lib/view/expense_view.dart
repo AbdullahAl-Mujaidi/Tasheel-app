@@ -2,6 +2,7 @@
 import 'package:fkra/controller/expense_controller.dart';
 import 'package:fkra/model/team_member_model.dart';
 import 'package:fkra/services/member_session_service.dart';
+import 'package:fkra/view/expense_reports_view.dart';
 import 'package:fkra/view/widgets/delegated_accounts_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:awesome_dialog/awesome_dialog.dart';
@@ -185,6 +186,30 @@ class ExpensesPage extends StatelessWidget {
                       ],
                     ),
                   ),
+                // زر تقارير المصروفات — مطابق لزرَّي الأعمال والعمال.
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => ExpenseReportsView(
+                            expenses: controller.expenses,
+                          ),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.table_view, size: 18),
+                    label: const Text(
+                      'تقارير المصروفات',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: colorScheme.primary,
+                      minimumSize: const Size.fromHeight(46),
+                    ),
+                  ),
+                ),
                 SizedBox(height: 5),
                 SizedBox(
                   width: 370,

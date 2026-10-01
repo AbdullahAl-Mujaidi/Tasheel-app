@@ -2,6 +2,7 @@
 import 'package:fkra/admin/services/firebase_usage_tracker.dart';
 import 'package:fkra/model/login_model.dart';
 import 'package:fkra/services/activity_service.dart';
+import 'package:fkra/services/account_status_service.dart';
 import 'package:fkra/services/member_session_service.dart';
 import 'package:fkra/services/analytics_service.dart';
 import 'package:flutter/material.dart';
@@ -72,9 +73,12 @@ class LoginController extends ChangeNotifier {
           await user.reload();
           final updatedUser = user;
           if (updatedUser.emailVerified) {
-            // فحص الحظر مثل المسار الإلكتروني — لا ندخل بحساب موقوف
-            final blocked = await _model.isAccountBlocked(updatedUser.uid);
-            if (blocked) {
+            // فحص حالة الحساب قبل حفظ الجلسة (مهما كان مالكاً أو مفوّضاً).
+            // `unknown` لا يحفظ جلسة: محاولة قديمة بلا اتصال لا يجوز أن
+            // تُعيد بناء جلسة لم يُتحقق منها.
+            final accessState =
+                await AccountStatusService.instance.checkUid(updatedUser.uid);
+            if (accessState != AccountAccessState.active) {
               await _model.signOut();
             } else {
               userId = updatedUser.uid;
@@ -174,6 +178,32 @@ class LoginController extends ChangeNotifier {
       await user.reload();
       final updatedUser = user;
 
+      // ⚠️ فحص حالة الحساب يتم هنا قبل أي تفريع (مالك / مفوّض).
+      // كان داخل فرع المالك فقط، فحساب المفوّض الموقوف كان يدخل بلا فحص.
+      //
+      //Fail-closed: `unknown` (تعذّر قراءة الحالة من الخادم) لا يُعامَل
+      //كنشط. قبل هذا كان `isAccountBlocked` يُرجع false عند أي فشل شبكة،
+      //فأدخل الموقوف فعلاً بلا إنترنت أو انقطاع قراءة.
+      final accessState = await AccountStatusService.instance
+          .checkUid(updatedUser.uid)
+          .timeout(const Duration(seconds: 8), onTimeout: () {
+        // انتهاء المهلة = لا تأكيد ⇒ يُمنع الدخول، ويبقى السبب منطقياً.
+        print('انتهت مهلة التحقق من حالة الحساب — يُمنع الدخول');
+        return AccountAccessState.unknown;
+      });
+      if (accessState == AccountAccessState.suspended) {
+        await _model.signOut();
+        isLoading = false;
+        notifyListeners();
+        return 'account_blocked';
+      }
+      if (accessState == AccountAccessState.unknown) {
+        await _model.signOut();
+        isLoading = false;
+        notifyListeners();
+        return 'account_status_unverifiable';
+      }
+
       // حسم الجلسة كمالك أو كمستخدم تابع فور نجاح المصادقة
         await MemberSessionService.instance.resolveForCurrentUser();
         final session = MemberSessionService.instance;
@@ -200,13 +230,6 @@ class LoginController extends ChangeNotifier {
 
         // المستخدم مالك للحساب
         if (updatedUser.emailVerified) {
-          final blocked = await _model.isAccountBlocked(updatedUser.uid);
-          if (blocked) {
-            await _model.signOut();
-            isLoading = false;
-            notifyListeners();
-            return 'account_blocked';
-          }
           await _model.saveSessionLocally(
               updatedUser.uid, updatedUser.email ?? emailController.text.trim());
           isLoading = false;
@@ -270,13 +293,25 @@ class LoginController extends ChangeNotifier {
       );
 
       if (user != null) {
-        // فحص ما إذا كان الحساب معلّقاً من لوحة المدير
-        final blocked = await _model.isAccountBlocked(user.uid);
-        if (blocked) {
+        // فحص ما إذا كان الحساب معلّقاً من لوحة المدير — بنفسي المنطق
+        // الفاشل-المغلق في مسار البريد: `unknown` يمنع الدخول أيضاً.
+        final accessState = await AccountStatusService.instance
+            .checkUid(user.uid)
+            .timeout(const Duration(seconds: 8), onTimeout: () {
+          print('انتهت مهلة التحقق من حالة الحساب (Google) — يُمنع الدخول');
+          return AccountAccessState.unknown;
+        });
+        if (accessState == AccountAccessState.suspended) {
           await _model.signOut();
           isLoading = false;
           notifyListeners();
           return 'account_blocked';
+        }
+        if (accessState == AccountAccessState.unknown) {
+          await _model.signOut();
+          isLoading = false;
+          notifyListeners();
+          return 'account_status_unverifiable';
         }
         // حسابات Google تعتبر بريدها موثقاً من مزود Google
         // السماح بالدخول مباشرة دون فحص emailVerified

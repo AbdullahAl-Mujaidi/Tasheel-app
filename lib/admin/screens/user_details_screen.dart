@@ -272,6 +272,13 @@ class _UserDetailsScreenState extends State<UserDetailsScreen> {
                   InfoRow(label: 'الدور', value: u.roleLabel),
                   InfoRow(
                       label: 'الحالة', value: u.isBlocked ? 'موقوف' : 'نشط'),
+                  // قيمة BOOL الفعلية كما هي مخزّنة في users/{uid}.isActive
+                  InfoRow(
+                    label: 'isActive',
+                    value: u.isActive.toString(),
+                    valueColor:
+                        u.isActive ? Colors.green : Theme.of(context).colorScheme.error,
+                  ),
                   InfoRow(
                       label: 'تاريخ التسجيل', value: formatDate(u.createdAt)),
                   InfoRow(label: 'مدة الاستخدام', value: accountAge),

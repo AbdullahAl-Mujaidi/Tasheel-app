@@ -75,6 +75,12 @@ class UserSnapshot {
   bool get isBlocked => status == 'blocked' || status == 'suspended';
   bool get isSuspended => status == 'suspended' || status == 'blocked';
 
+  /// قيمة BOOL المطلوبة: نشط = true، موقوف = false.
+  ///
+  /// تُشتق من `isActive` المخزّن مع `status`، وغياب الحقل (وثائق قديمة)
+  /// يُعامَل كنشط توافقاً مع `AccountStatusService.parseIsActive`.
+  bool get isActive => !isBlocked;
+
   String get roleLabel {
     if (email.trim().toLowerCase() == 'abdullahalmjudi@gmail.com' || userType == 'super_admin') {
       return 'مدير عام';

@@ -5,6 +5,7 @@ import 'package:fkra/admin/admin_portal.dart';
 import 'package:fkra/admin/services/admin_session_service.dart';
 import 'package:fkra/controller/login_controller.dart';
 import 'package:fkra/model/login_model.dart';
+import 'package:fkra/services/account_access_guard.dart';
 import 'package:fkra/services/member_session_service.dart';
 import 'package:fkra/view/account_view.dart';
 import 'package:fkra/view/change_temporary_password_view.dart';
@@ -24,6 +25,44 @@ Future<void> _goToHome(BuildContext context, String userId) async {
 
   final session = MemberSessionService.instance;
 
+  // ⚠️ البوابة الجامعة لكل طرفي الدخول (بريد وGoogle): لا يكفي أن يكون
+  // `users/{uid}` الخاص بالمستخدم نشطاً — فالمستخدم تابع قد يكون نشطاً
+  // بينما المالك الذي فوّضه موقوف، فيدخل إلى مساحة حساب موقوف.
+  // نفرض "الوصول الفعلي = حالت أنا + حالة المالك الذي أعرض حسابه" قبل فتح أي مساحة.
+  final access = await AccountAccessGuard.instance.evaluate();
+
+  // ⭐ المالك موقوف لكن حسابي أنا نشط: ألغِ التفويض فقط وادخل حسابي
+  // الشخصي. كان هذا يخرجني من حسابي أيضاً فيمنعني الدخول أصلاً.
+  if (access.requiresPersonalScope) {
+    await MemberSessionService.instance.switchToPersonal();
+  }
+
+  if (access != EffectiveAccess.active) {
+    // الفشل العابر (شبكة) لا يُتلف الجلسة ولا يخرج المستخدم من Firebase
+    // Auth؛ يمنع الدخول فقط، فنكتفي بتنظيف الجلسة المحلية ثم شاشة الدخول.
+    if (access.isBlocked) {
+      await MemberSessionService.instance.clearSession();
+      await LoginModel.signOutPlatform();
+      AccountAccessGuard.instance.reset();
+    }
+    if (!context.mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(
+        builder: (_) => LoginScreen(
+          notice: access.notice,
+          noticeColor: access == EffectiveAccess.unknown
+              ? Colors.orange
+              : const Color(0xFFD32F2F),
+        ),
+      ),
+      (route) => false,
+    );
+    return;
+  }
+
+  // مراقبة دورية لحالة المالك أثناء الاستخدام (إن كان المستخدم تابعاً).
+  AccountAccessGuard.instance.startOwnerWatch();
+
   if (session.isSubUser) {
     final member = session.member;
     // موقوف/محذوف على مستوى العضوية لا يدخل.
@@ -37,6 +76,7 @@ Future<void> _goToHome(BuildContext context, String userId) async {
       );
       return;
     }
+    if (!context.mounted) return;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (_) => session.mustChangePassword
@@ -58,11 +98,41 @@ Future<void> _goToHome(BuildContext context, String userId) async {
   );
 }
 
-class LoginScreen extends StatelessWidget {
-  const LoginScreen({super.key});
+class LoginScreen extends StatefulWidget {
+  /// رسالة تُعرض كـtoast مرة واحدة (مثل "تعذّر التحقق" أو "المالك موقوف").
+  final String? notice;
+  final Color? noticeColor;
+
+  const LoginScreen({super.key, this.notice, this.noticeColor});
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  /// يمنع تكرار الـtoast عند كل إعادة بناء (Consumer/تغيّر الشبكة).
+  bool _noticeShown = false;
+
+  void _showNoticeOnce() {
+    if (_noticeShown) return;
+    final notice = widget.notice;
+    if (notice == null || notice.isEmpty) return;
+    _noticeShown = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(notice),
+          backgroundColor: widget.noticeColor ?? Colors.orange,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
+    _showNoticeOnce();
     return ChangeNotifierProvider(
       create: (_) => LoginController(),
       child: Consumer<LoginController>(
@@ -289,8 +359,18 @@ class LoginScreen extends StatelessWidget {
                                       AwesomeDialog(
                                         context: context,
                                         title: "حساب موقوف",
-                                        desc: "تم إيقاف حسابك، يرجى التواصل مع إدارة تسهيل.",
+                                        desc: "العفو منك حساب موقف",
                                         dialogType: DialogType.error,
+                                        btnOkText: "حسناً",
+                                        btnOkOnPress: () {},
+                                      ).show();
+                                    } else if (result == 'account_status_unverifiable') {
+                                      AwesomeDialog(
+                                        context: context,
+                                        title: "تعذّر التحقق من الحساب",
+                                        desc: "لم نتمكن من التأكد إن كان حسابك نشطاً. "
+                                            "اتصل بالإنترنت وأعد المحاولة.",
+                                        dialogType: DialogType.warning,
                                         btnOkText: "حسناً",
                                         btnOkOnPress: () {},
                                       ).show();

@@ -552,4 +552,42 @@ class DatabaseHelper {
           where: 'user_id = ? AND key = ?', whereArgs: [userId, 'user_profile']);
     });
   }
+
+  /// كل الجداول التي تحمل بيانات مستخدم (الجميع مفهرس بـ user_id).
+  static const List<String> _userScopedTables = [
+    'transactions',
+    'expenses',
+    'workers',
+    'businesses',
+    'custom_fields',
+    'app_cache',
+  ];
+
+  /// حذف *كامل* لكل بيانات [userIds] من قاعدة البيانات المحلية.
+  ///
+  /// الفرق عن `clearUserData`: هذا يمسح الأعمال والحركات والمصروفات والعمال
+  /// وكاش التطبيق، لا الحقول المخصصة فقط — وهو المطلوب عند حذف الحساب.
+  ///
+  /// لماذا نمرّر قائمة معرّفات وليس معرّفاً واحداً؟ لأن صفوف تفويض المستخدم
+  /// (delegate) مخزَّنة محلياً تحت `user_id` المالك الذي يعرض بياناته. فحذف
+  /// الحساب يجب أن يمسح تلك السطور أيضاً عن هذا الجهاز: بعد الحذف لم يعد
+  /// المستخدم مخوَّلاً أصلاً برؤية بيانات المالك، وإبقاؤها محلياً تسريب.
+  /// ملاحظة: هذا لا يمسّ بيانات المالك على سحابة/جهازه — التنظيف هنا محلي
+  /// على جهاز الحساب المحذوف فقط.
+  Future<void> purgeUserData(List<String> userIds) async {
+    final ids = userIds.where((id) => id.trim().isNotEmpty).toSet();
+    if (ids.isEmpty) return;
+
+    final db = await database;
+    final args = ids.toList();
+    final placeholders = List.filled(args.length, '?').join(', ');
+
+    await db.transaction((txn) async {
+      for (final table in _userScopedTables) {
+        await txn.delete(table,
+            where: 'user_id IN ($placeholders)', whereArgs: args);
+      }
+    });
+    print('تم حذف بيانات المستخدم محلياً من ${_userScopedTables.length} جداول: $ids');
+  }
 }

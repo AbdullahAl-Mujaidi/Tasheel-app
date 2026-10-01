@@ -1,11 +1,10 @@
 import 'dart:async';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:fkra/home_page.dart';
 import 'package:fkra/admin/admin_portal.dart';
-import 'package:fkra/admin/services/firebase_usage_tracker.dart';
 import 'package:fkra/model/account_model.dart';
 import 'package:fkra/model/login_model.dart';
+import 'package:fkra/services/account_access_guard.dart';
 import 'package:fkra/services/activity_service.dart';
 import 'package:fkra/services/member_session_service.dart';
 import 'package:fkra/view/change_temporary_password_view.dart';
@@ -92,6 +91,57 @@ class _SplashScreenState extends State<SplashScreen> {
 
       String userId = currentUser!.uid;
 
+      // ⚠️ ترتيب مقصود: فحص حالة الحساب قبل استعادة الجلسة محلياً.
+      // كان الاستعادة (is_logged_in=true) يسبق الفحص، فحساب مقيَّد كان يُستأنف
+      // كجلسة صالحة ثم يُطرد بعدها — تترك نافذة دخول مرتجعة.
+      // وكان الفحص بمهلة 800ms عبر الخادم+الكاش: مهلة قصيرة تفشل غالباً على
+      // شبكة الجوال ⇒ كان fail-open هو السلوك الافتراضي عملياً.
+      // ⚠️ Fail-closed: `unknown` (تعذّرت القراءة) لا يُعامَل كنشط. كان الحجب
+      // على `suspended` وحده ⇒ الموقوف كان يدخل بتشغيل التطبيق بلا إنترنت.
+      // في حالة `unknown` لا نمحو الجلسة: عطل شبكة لا يجوز أن يُحوّل إلى
+      // فقدان بيانات، فنتركها تُفحص عند أول تشغيل ناجح.
+      //
+      // ⚠️ الأهم: الفحص كان على `users/{uid}` الخاص بالمستخدم فقط، فالتابع
+      // (علي/قاسم) كان يُستأنف نشطاً داخل حساب مالكه الموقوف. الآن الفحص
+      // على "الوصول الفعلي" = حالت أنا + حالة المالك بعد حلّ الجلسة أعلاه
+      // (يستبدل الفحص المكرر السابق بـcheckUid فيقرأ وثيقتين لا ثلاث).
+      final access = await AccountAccessGuard.instance.evaluate(
+        timeout: const Duration(seconds: 5),
+      );
+
+      // ⭐ حسابي أنا نشط والمالك وحده موقوف ⇒ ألغِ نطاق التفويض وأكمل
+      // إلى حسابي الشخصي بدل الإخراج الكامل.
+      if (access.requiresPersonalScope) {
+        await MemberSessionService.instance.switchToPersonal();
+      }
+
+      if (access != EffectiveAccess.active) {
+        if (access.isBlocked) {
+          // إيقاف حسابي أنا ⇒ خروج كامل ومسح تفضيل الجلسة.
+          await MemberSessionService.instance.clearSession();
+          AccountAccessGuard.instance.reset();
+          await LoginModel.signOutPlatform();
+          await LoginModel.clearSessionPrefs();
+        }
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => LoginScreen(
+                notice: access.notice,
+                noticeColor: access == EffectiveAccess.unknown
+                    ? Colors.orange
+                    : Theme.of(context).colorScheme.error,
+              ),
+            ),
+          );
+        }
+        return;
+      }
+
+      // مراقبة دورية لحالة المالك أثناء الاستخدام (إن كان المستخدم تابعاً).
+      AccountAccessGuard.instance.startOwnerWatch();
+
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('user_id', userId);
       await prefs.setBool('is_logged_in', true);
@@ -103,30 +153,6 @@ class _SplashScreenState extends State<SplashScreen> {
         isLogin: true,
         method: currentUser.email != null ? 'email' : null,
       ));
-
-      // منع دخول الحسابات المعلّقة من لوحة المدير (مع مهلة قصيرة 800ms)
-      try {
-        final profile = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(userId)
-            .get(const GetOptions(source: Source.serverAndCache))
-            .timeout(const Duration(milliseconds: 800));
-        FirebaseUsageTracker.instance.recordRead();
-        final status = profile.data()?['status']?.toString();
-        if (profile.exists && (status == 'blocked' || status == 'suspended')) {
-          await LoginModel.signOutPlatform();
-          await LoginModel.clearSessionPrefs();
-          if (mounted) {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(builder: (context) => const LoginScreen()),
-            );
-          }
-          return;
-        }
-      } catch (_) {
-        // دون اتصال: لا يمكن التحقق — نسمح بالدخول بحالة الجلسة المحلية
-      }
 
       // تحديد الدور (مع مهلة قصيرة 800ms للمرور السريع دون إنترنت)
       dynamic adminRole;

@@ -105,7 +105,15 @@ class StatCard extends StatelessWidget {
 class InfoRow extends StatelessWidget {
   final String label;
   final String value;
-  const InfoRow({super.key, required this.label, required this.value});
+
+  /// لون مخصّص للقيمة (مثال: أخضر لـ`true` وأحمر لـ`false`).
+  final Color? valueColor;
+  const InfoRow({
+    super.key,
+    required this.label,
+    required this.value,
+    this.valueColor,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -119,7 +127,10 @@ class InfoRow extends StatelessWidget {
           Expanded(
             child: Text(
               value,
-              style: const TextStyle(fontWeight: FontWeight.w600),
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                color: valueColor,
+              ),
               textAlign: TextAlign.end,
             ),
           ),

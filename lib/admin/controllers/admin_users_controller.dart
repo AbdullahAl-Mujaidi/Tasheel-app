@@ -201,15 +201,21 @@ class AdminUsersController extends ChangeNotifier {
   }
 
   Future<String?> setBlocked(UserSnapshot u, bool blocked) async {
+    lastActionUsedFirestoreFallback = false;
     return _act(() async {
       final newStatus = blocked ? 'suspended' : 'active';
       final oldStatus = u.status;
       try {
         await AdminApi.instance.setUserStatus(uid: u.uid, disabled: blocked);
-      } catch (_) {
-        // بديل بدون Cloud Functions: تعليق عبر قاعدة البيانات مباشرة
-        await AdminFirestoreService.instance
-            .setUserBlockedStatus(uid: u.uid, blocked: blocked);
+        lastActionUsedFirestoreFallback = false;
+      } catch (e) {
+        final message = e.toString();
+        // لا نتراجع للمسار الاحتياطي إلا لعطل بنية تحتية معروف — مثال:
+        // Cloud Functions غير منشورة أو خطأ شبكة.
+        if (!_isUnavailable(message)) rethrow;
+        
+        await _firestoreFallback(u.uid, blocked);
+        lastActionUsedFirestoreFallback = true;
       }
       await _record(
         blocked ? 'user_blocked' : 'user_unblocked',
@@ -219,6 +225,21 @@ class AdminUsersController extends ChangeNotifier {
       );
     });
   }
+
+  /// المسار الاحتياطي: يكتب الحالة في Firestore فقط.
+  ///
+/// ⚠️ حدوده الصريحة: هذا يوقف ما يراه العميل ويمنع القراءة والكتابة عبر
+  /// Security Rules، لكنه **لا يعطّل** Firebase Auth ولا يقطع الجلسات القائمة.
+  /// لذا نعرض تنبيهاً صريحاً (إعداد ناقص) بدل ادّعاء نجاح كامل، ويجب أن
+  /// ينجح المسار الأول.
+  Future<void> _firestoreFallback(String uid, bool blocked) async {
+    await AdminFirestoreService.instance
+        .setUserBlockedStatus(uid: uid, blocked: blocked);
+  }
+
+  /// هل نُفِّذ آخر تقييد عبر المسار الاحتياطي (بلا تعطيل Auth)؟
+  /// الواجهة تستخدمه لعرض تنبيه صريح بدل ادّعاء النجاح الكامل.
+  bool lastActionUsedFirestoreFallback = false;
 
   Future<String?> deleteUser(UserSnapshot u) async {
     return _act(() async {

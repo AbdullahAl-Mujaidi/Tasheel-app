@@ -339,10 +339,15 @@ class AdminFirestoreService {
     }, SetOptions(merge: true));
   }
 
-  /// يعلّق/يلغي تعليق حساب مستخدم (الحقل status في وثيقة المستخدم).
-  Future<void> setUserBlockedStatus({required String uid, required bool blocked}) async {
+/// يعلّق/يلغي تعليق حساب مستخدم.
+///
+/// `status` و`isActive` يُكتبان في العملية نفسها (Atomic) — لا يمكن أن
+/// يتعارضا، فإما أن يرى القارئ "موقوف" من الحقلين معاً أو لا يرى تغييراً.
+/// `isActive` هو Bool صريح في قاعدة البيانات كما هو مطلوب.
+Future<void> setUserBlockedStatus({required String uid, required bool blocked}) async {
     await _db.collection('users').doc(uid).set({
       'status': blocked ? 'suspended' : 'active',
+      'isActive': !blocked,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
   }

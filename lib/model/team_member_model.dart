@@ -13,6 +13,7 @@
 //   actions : read / create / update / delete
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fkra/db/database_helper.dart';
+import '../services/account_status_service.dart';
 
 /// الوحدات المدعومة في التطبيق (نفس أسماء مسارات البيانات أو الصفحات).
 class TeamPermissions {
@@ -105,6 +106,7 @@ class TeamMember {
   }
 
   bool canAccess(String module, String action) {
+    if (status != 'active') return false;
     final modulePerm = permissions[module];
     if (modulePerm == null) return false;
     return modulePerm[action] == true;
@@ -347,8 +349,14 @@ class TeamMemberRepository {
         }
         final member = TeamMember.fromMap(data, uid: memberUid, ownerUid: ownerUid);
         if (member.status == 'active') {
-          list.add(member);
-          _saveLookupHelper(ownerUid, memberUid, member.email);
+          // فحص حالة المالك (هل هو موقوف/محظور؟)
+          final ownerStatus = await AccountStatusService.instance.checkUid(ownerUid);
+          if (ownerStatus != AccountAccessState.suspended) {
+            list.add(member);
+            _saveLookupHelper(ownerUid, memberUid, member.email);
+          } else {
+            print('fetchDelegationsForUser: تجاهل المالك $ownerUid لأنه مقيد');
+          }
         }
       }
       list.sort((a, b) => a.ownerName.compareTo(b.ownerName));
@@ -365,7 +373,12 @@ class TeamMemberRepository {
     // واحدة عبر المسارات التدريجية المعروفة (الأولى فقط).
     try {
       final member = await findMembershipByUid(memberUid);
-      if (member != null && member.status == 'active') list.add(member);
+      if (member != null && member.status == 'active') {
+        final ownerStatus = await AccountStatusService.instance.checkUid(member.ownerUid);
+        if (ownerStatus != AccountAccessState.suspended) {
+          list.add(member);
+        }
+      }
     } catch (e) {
       print('تحذير: فشل جلب التفويض الاحتياطي: $e');
     }

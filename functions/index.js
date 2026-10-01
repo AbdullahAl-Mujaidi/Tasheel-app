@@ -340,27 +340,42 @@ exports.deleteSubUser = functions.https.onCall(async (data, context) => {
   }
 
   try {
-    await admin.auth().deleteUser(memberUid);
+    // ⚠️ لا نحذف حساب المصادقة إلا إذا لم يكن للعضو تفويضٌ آخر. العضو قد يكون
+    // حسابه الخاص (مستخدم مستقل) أو مفوضاً لدى مالكٍ ثانٍ — وحذف حسابه هنا
+    // كان يمحو بياناته الشخصية وحسابه بالكامل بحسم مالك واحد.
+    const others = await db.collectionGroup('team_members').where('uid', '==', memberUid).get();
+    // ⚠️ الاستعلام يعيد العضوية التي نحذفها الآن أيضاً (لم تُحذف بعد)، فالحكم على
+    // "لديه مالك آخر" يجب أن يستثني المالك الحالي صراحةً. لولا ذلك لبقي حساب
+    // العضو وبياناته بعد حذف تفويضه الوحيد.
+    const otherOwners = others.docs
+      .map((d) => (d.data().ownerUid || d.ref.parent.parent.id).toString())
+      .filter((o) => o && o !== ownerUid);
+    const stillDelegatedElsewhere = otherOwners.length > 0;
 
-    // حذف وثيقة العضوية.
-    await db.collection('users').doc(ownerUid).collection('team_members').doc(memberUid).delete();
-
-    // حذف أي بيانات فرعية تحت uid التابع (مثل أجهزة FCM التابعة له).
-    const devicesRef = db.collection('users').doc(memberUid).collection('devices');
-    const devicesSnap = await devicesRef.get();
-    for (const doc of devicesSnap.docs) {
-      await doc.ref.delete();
+    if (stillDelegatedElsewhere) {
+      // يبقى حسابه (بياناته الشخصية) — يُفقط فقط من هذا المالك.
+      await admin.auth().updateUser(memberUid, { disabled: false });
+    } else {
+      await admin.auth().deleteUser(memberUid);
+      await deleteDocTree(db.collection('users').doc(memberUid));
+      await db.collection('member_lookups').doc(memberUid).delete().catch(() => {});
+      await db.collection('admin_users').doc(memberUid).delete().catch(() => {});
+      await db.collection('admin_stats').doc(`user_counts/${memberUid}`).delete().catch(() => {});
+      await purgeInvitesOf(memberUid, '');
     }
+
+    // حذف وثيقة العضوية (علاقة فقط — بيانات المالك لا تُمَسّ).
+    await db.collection('users').doc(ownerUid).collection('team_members').doc(memberUid).delete();
 
     await writeAuditLog({
       actorUid: context.auth.uid,
       actorEmail: context.auth.token.email || null,
       action: 'sub_user_deleted',
       result: 'success',
-      details: { memberUid },
+      details: { memberUid, authAccountDeleted: !stillDelegatedElsewhere, otherOwners },
     });
 
-    return { success: true };
+    return { success: true, authAccountDeleted: !stillDelegatedElsewhere };
   } catch (e) {
     throw new functions.https.HttpsError('internal', 'حدث خطأ أثناء حذف المستخدم');
   }
@@ -705,12 +720,18 @@ exports.removeAdminRole = functions.https.onCall(async (data, context) => {
 });
 
 // ===================== حذف وثيقة وشجرة البيانات الفرعية =====================
+// ملاحظة: التكرار ضروري. كل get() يُعيد دفعة واحدة فقط، فمع أي مجموعة
+// تتجاوزها يُحذف ما ظاهر منها ثم تُحذف الوثيقة الأم وتبقى توائم يتيمة
+// (مثل businesses وحركاتها الفرعية تحت transactions).
 async function deleteDocTree(ref) {
   const collections = await ref.listCollections();
   for (const col of collections) {
-    const snap = await col.get();
-    for (const doc of snap.docs) {
-      await deleteDocTree(doc.ref);
+    while (true) {
+      const snap = await col.limit(100).get();
+      if (snap.empty) break;
+      for (const doc of snap.docs) {
+        await deleteDocTree(doc.ref);
+      }
     }
   }
   if ((await ref.get()).exists) {
@@ -718,7 +739,185 @@ async function deleteDocTree(ref) {
   }
 }
 
-// ===================== حذف حساب مستخدم نهائياً =====================
+// ===================== تنظيف علاقات الحساب (Owner / Delegate) =====================
+// rule أساسية لا تُكسر هنا:
+//   حذف حساب مفوّض  ⇒ تُحذف علاقته (team_members) من كل مالك،
+//                       ولا يُمَسّ أيٌّ من بيانات ذلك المالك إطلاقاً.
+//   حذف حساب مالك    ⇒ تُحذف شجرة بياناته كاملة (هي مِلكه)، وتُفكّ علاقة كل عضو
+//                       لديه فقط، مع بقاء حسابات الأعضاء (قد يكونون مفوضين
+//                       لدى مالك آخر).
+async function collectMembershipsOf(uid) {
+  const snap = await db.collectionGroup('team_members').where('uid', '==', uid).get();
+  return snap.docs;
+}
+
+// يحذف وثائق العضوية ويعيد توجيه/تفريغ ملف العضو بحسب ما تبقّى له من تفويضات.
+async function purgeMembershipRelations(membershipDocs) {
+  const memberUids = new Set();
+  for (const doc of membershipDocs) {
+    const data = doc.data() || {};
+    const memberUid = data.uid || doc.id;
+    try {
+      await doc.ref.delete();
+    } catch (e) {
+      console.error('تعذّر حذف وثيقة العضوية', doc.ref.path, e);
+    }
+    if (memberUid) memberUids.add(memberUid);
+  }
+
+  for (const memberUid of memberUids) {
+    try {
+      const rest = await db.collectionGroup('team_members').where('uid', '==', memberUid).get();
+      const remaining = rest.docs[0];
+      if (remaining) {
+        // ما زال مفوّضاً لدى مالك آخر ⇒ تُترك علاقاته نشطة وتُوجَّه فهارسه
+        // إلى المالك المتبقي فقط (لا نلمس حسابه ولا بياناته).
+        const remainingOwner = (remaining.data().ownerUid || remaining.ref.parent.parent.id).toString();
+        await db.collection('member_lookups').doc(memberUid).set({
+          uid: memberUid,
+          ownerUid: remainingOwner,
+          email: remaining.data().email || '',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        await db.collection('users').doc(memberUid).set({
+          ownerUid: remainingOwner,
+          userType: 'sub_user',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+      } else {
+        // لم يبقَ له أي تفويض ⇒ يُفرَّغ ملفه ليُعامل كمستخدم مستقل.
+        await db.collection('member_lookups').doc(memberUid).delete().catch(() => {});
+        await db.collection('users').doc(memberUid).set({
+          ownerUid: admin.firestore.FieldValue.delete(),
+          inviteId: admin.firestore.FieldValue.delete(),
+          userType: 'user',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true }).catch(() => {});
+      }
+    } catch (e) {
+      console.error('تعذّر تنظيف فهارس العضو', memberUid, e);
+    }
+  }
+}
+
+// يحذف دعوات التفويض الخاصة ببريد الحساب أو التي أنشأها هو (كمالك).
+async function purgeInvitesOf(uid, email) {
+  try {
+    if (email) {
+      const byEmail = await db.collection('member_invites').where('email', '==', email).get();
+      for (const d of byEmail.docs) await d.ref.delete();
+    }
+  } catch (e) {
+    console.error('تعذّر حذف الدعوات ببريد المستخدم', uid, e);
+  }
+  try {
+    const byOwner = await db.collection('member_invites').where('ownerUid', '==', uid).get();
+    for (const d of byOwner.docs) await d.ref.delete();
+  } catch (e) {
+    console.error('تعذّر حذف دعوات المالك', uid, e);
+  }
+}
+
+// ===================== حذف المستخدم لنفسه (Delete My Account) =====================
+// نموذج الأمان:
+//  - الهدف هو `context.auth.uid` حصرياً. لا يوجد أي معامل uid من العميل، فلا
+//    يستطيع مستخدم أن يحذف بيانات غيره أبداً (حتى لو عبّث بالطلب).
+//  - يُشترط دخول حديث (re-auth) خلال 30 دقيقة: التوكن المسروق/المشترك لا يكفي
+//    لحذف حساب غير قابل للاسترجاع.
+//  - التنظيف server-side بالكامل عبر Admin SDK (حساب Auth + شجرة البيانات).
+//  - مفوض لدى مالك ⇒ تُحذف علاقته من ذلك المالك فقط، ولا يُمَسّ أيٌّ من بيانات
+//    المالك. مالك ⇒ تُحذف شجرة بياناته كاملة (هي ملكه) وتفكّ علاقات أعضائه.
+//  - الحذف الذاتي ممنوع على الحسابات المحمية (PROTECTED_ADMINS) وعلى المدير العام.
+const SELF_DELETE_MAX_AUTH_AGE_MS = 30 * 60 * 1000;
+
+exports.deleteOwnAccount = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'يجب تسجيل الدخول أولاً');
+  }
+  const uid = context.auth.uid;
+
+  const authTimeMs = (context.auth.token.auth_time || 0) * 1000;
+  if (!authTimeMs || Date.now() - authTimeMs > SELF_DELETE_MAX_AUTH_AGE_MS) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'انتهت مدة التأكيد. أعد تسجيل الدخول (أو أعد إدخال كلمة المرور) ثم حاول مجدداً.'
+    );
+  }
+
+  let target;
+  try {
+    target = await admin.auth().getUser(uid);
+  } catch (e) {
+    // الحساب محذوف أصلاً في Auth ⇒ نُكمل تنظيف بقايا Firestore وننهي بهدوء.
+    target = null;
+  }
+
+  const email = target && target.email ? target.email.toLowerCase() : '';
+  if (PROTECTED_ADMINS.includes(email)) {
+    throw new functions.https.HttpsError('permission-denied', 'هذا الحساب محمي ولا يمكن حذفه');
+  }
+  if (target && target.customClaims && target.customClaims.role === 'super_admin') {
+    throw new functions.https.HttpsError('permission-denied', 'لا يمكن حذف حساب المدير العام');
+  }
+
+  // 1) علاقات التفويض: تُجمع وتُحذف قبل حذف الملف الشخصي (مهم: وثائق العضوية
+  //    تعيش تحت users/{ownerUid} فلن تمسّها خطوة الحذف التالية).
+  const memberships = await collectMembershipsOf(uid);
+  await purgeInvitesOf(uid, email);
+  await purgeMembershipRelations(memberships);
+
+  // 2) بيانات الحساب نفسه: وثيقة users/{uid} بكل ما تحتها (works/workers/
+  //    expenses/custom_fields/devices …). هذا يشمل بيانات المالك إن كان مالكاً،
+  //    ولا يشمل بيانات أي مالك آخر.
+  await deleteDocTree(db.collection('users').doc(uid));
+
+  // 3) السجلات ذات المستوى الأعلى: فهرس العضوية والإدارة والإحصائيات.
+  await db.collection('member_lookups').doc(uid).delete().catch(() => {});
+  await db.collection('admin_users').doc(uid).delete().catch(() => {});
+  await db.collection('admin_stats').doc(`user_counts/${uid}`).delete().catch(() => {});
+
+  // 4) حساب المصادقة — أخيراً، لأنه يُنهي هوية المستدعي.
+  let authDeleted = true;
+  if (target) {
+    try {
+      await admin.auth().deleteUser(uid);
+    } catch (e) {
+      if (e && e.code === 'auth/user-not-found') {
+        authDeleted = true;
+      } else {
+        authDeleted = false;
+        console.error('تعذّر حذف حساب Auth', uid, e);
+      }
+    }
+  }
+
+  await writeAuditLog({
+    actorUid: uid,
+    actorEmail: email || null,
+    action: 'self_account_deleted',
+    result: 'success',
+    details: {
+      uid,
+      email,
+      removedMemberships: memberships.length,
+      authDeleted,
+      dataTreeDeleted: true,
+    },
+  });
+
+  if (!authDeleted) {
+    // ⚠️ حالة جزئية لا فشل: بيانات المستخدم حُذفت فعلاً من Firestore (شجرة
+    // كاملة + علاقات + فهارس)، وتعذّر فقط حذف حساب المصادقة. نُرجع نجاحاً
+    // مع `authDeleted:false` بدل رمي internal، لأن العميل يجب أن يمسح بياناته
+    // المحلية ويخرج. الرمي كان يجعله يمسحها عند أي خطأ — بما فيه خطأ لم
+    // يُحذف فيه شيء من الخادم ⇒ فقدان بيانات.
+    console.error('حُذفت البيانات لكن حساب Auth باقٍ:', uid);
+  }
+
+  return { success: true, uid, removedMemberships: memberships.length, authDeleted };
+});
+
+// ===================== حذف حساب مستخدم نهائياً (Super Admin) =====================
 exports.deleteUser = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'يجب تسجيل الدخول أولاً');
@@ -748,10 +947,16 @@ exports.deleteUser = functions.https.onCall(async (data, context) => {
 
     await admin.auth().deleteUser(uid);
 
+    // علاقات التفويض تُحذف أولاً (تعيش تحت users/{ownerUid} فلن تمسّها الخطوة التالية)
+    const memberships = await collectMembershipsOf(uid);
+    await purgeInvitesOf(uid, targetEmail);
+    await purgeMembershipRelations(memberships);
+
     // حذف بيانات المستخدم (وثيقة + كل البيانات الفرعية)
     await deleteDocTree(db.collection('users').doc(uid));
 
     // تنظيف السجلات الإدارية
+    await db.collection('member_lookups').doc(uid).delete().catch(() => {});
     await db.collection('admin_users').doc(uid).delete().catch(() => {});
     await db.collection('admin_stats').doc(`user_counts/${uid}`).delete().catch(() => {});
 
@@ -801,9 +1006,19 @@ exports.setUserStatus = functions.https.onCall(async (data, context) => {
 
     await admin.auth().updateUser(uid, { disabled });
 
+    // قطع كل الجلسات القائمة فوراً. `disabled` وحده يمنع الدخول الجديد فقط،
+    // أما ID Token الصادر قبل التقييد فيبقى صالحاً حتى ساعة — بإبطال رموز
+    // التجديد نستطيع إنهاء أي جلسة مفتوحة فوراً (وتغطي حالة "الجلسة القديمة").
+    if (disabled) {
+      await admin.auth().revokeRefreshTokens(uid);
+    }
+
     await db.collection('users').doc(uid).set(
       {
-        status: disabled ? 'blocked' : 'active',
+        status: disabled ? 'suspended' : 'active',
+        // مرآة Bool مطلوبة في قاعدة البيانات؛ تُكتب مع status في عملية
+        // واحدة فلا تتعارضان. القواعد تعتمد الاثنين معاً (ORfail-closed).
+        isActive: !disabled,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
       { merge: true }

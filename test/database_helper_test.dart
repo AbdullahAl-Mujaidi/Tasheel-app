@@ -273,6 +273,82 @@ void main() {
     expect(await db.loadCustomFields(userId), isEmpty);
     expect((await db.loadAll('businesses', userId)).length, 1);
   });
+
+  test('purgeUserData يمسح كل الجداول ولا يمسّ مستخدماً آخر', () async {
+    final db = DatabaseHelper.instance;
+    final victim = newUser();
+    final other = newUser();
+
+    // حساب الضحية: بيانات في كل جدول.
+    await db.saveAll('businesses', victim, [
+      {'id': 'b1', 'name': 'مشروع'}
+    ]);
+    await db.saveAll('transactions', victim, [
+      {'id': 't1', 'amount': 100}
+    ]);
+    await db.saveAll('expenses', victim, [
+      {'id': 'e1', 'amount': 5.0}
+    ]);
+    await db.saveAll('workers', victim, [
+      {'id': 'w1', 'name': 'عامل'}
+    ]);
+    await db.saveCustomFields(victim, [
+      {'id': 'f1', 'fieldName': 'حقل'}
+    ]);
+    await db.setCache(victim, 'user_profile', {'fullName': 'ضحية'});
+
+    // مستخدم آخر يجب ألا يتأثر.
+    await db.saveAll('businesses', other, [
+      {'id': 'b2', 'name': 'مشروع آخر'}
+    ]);
+    await db.saveAll('transactions', other, [
+      {'id': 't2', 'amount': 200}
+    ]);
+
+    await db.purgeUserData([victim]);
+
+    expect((await db.loadAll('businesses', victim)).length, 0);
+    expect((await db.loadAll('transactions', victim)).length, 0);
+    expect((await db.loadAll('expenses', victim)).length, 0);
+    expect((await db.loadAll('workers', victim)).length, 0);
+    expect(await db.loadCustomFields(victim), isEmpty);
+    expect(await db.getCache(victim, 'user_profile'), isNull);
+
+    expect((await db.loadAll('businesses', other)).length, 1);
+    expect((await db.loadAll('transactions', other)).length, 1);
+  });
+
+  test('purgeUserData يطمس صفوف المفوّض المخزَّنة تحت uid المالك', () async {
+    // سيناريو الحذف الذاتي لمفوّض: بياناته محليةً تحت user_id المالك.
+    final db = DatabaseHelper.instance;
+    final delegate = newUser();
+    final owner = newUser();
+
+    await db.saveAll('businesses', owner, [
+      {'id': 'b1', 'name': 'بيانات المالك'}
+    ]);
+    await db.saveAll('workers', owner, [
+      {'id': 'w1', 'name': 'سطر كتبه المفوّض'}
+    ]);
+
+    // حذف الحساب ينظّف uid المفوّض + uid المالك (لأن صفوفه مخزَّنة تحته).
+    await db.purgeUserData([delegate, owner]);
+
+    expect((await db.loadAll('businesses', owner)).length, 0);
+    expect((await db.loadAll('workers', owner)).length, 0);
+  });
+
+  test('purgeUserData يتجاهل المعرّفات الفارغة', () async {
+    final db = DatabaseHelper.instance;
+    final keep = newUser();
+    await db.saveAll('businesses', keep, [
+      {'id': 'b1', 'name': 'يبقى'}
+    ]);
+
+    await db.purgeUserData(['', '   ']);
+
+    expect((await db.loadAll('businesses', keep)).length, 1);
+  });
 }
 
 int _seq = 0;

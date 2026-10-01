@@ -3,8 +3,33 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // ===================== دوال مساعدة =====================
+
+    // حالة الحساب (accountStatus) — مصدر الحقيقة: الحقل `status` في وثيقة
+    // users/{uid} الذي تكتبه لوحة المدير / Cloud Function فقط.
+    // ⚠️ هذه هي البوابة الوحيدة التي تُسقط كل صلاحية فور تقييد حساب، حتى لو
+    // كان لدى المستخدم توكن Firebase صالح (جلسة قديمة أو جهاز آخر) — لأن
+    // `disabled` في Auth وحده لا يُبطل ID Token الصادر قبل ساعة.
+    // قيمتا suspended/blocked = حساب مقيَّد. أي قيمة أخرى (أو وثيقة مفقودة
+    // لحساب قديم) = نشط، حتى لا تنكسر الحسابات الموجودة مسبقًا.
+    function accountStatusOf(uid) {
+      return exists(/databases/$(database)/documents/users/$(uid))
+        ? (get(/databases/$(database)/documents/users/$(uid)).data.get('isActive', true) == false
+           ? 'suspended'
+           : get(/databases/$(database)/documents/users/$(uid)).data.get('status', 'active'))
+        : 'active';
+    }
+
+    // الحساب نفسه غير مقيَّد. لا علاقة له بالملك/المفوض إطلاقًا:
+    // تقييد عضو (delegate) لا يمنع مالكَه، وتقييد مالك لا يمنع أعضاءَه.
+    function isAccountActive() {
+      return request.auth != null
+        && !(accountStatusOf(request.auth.uid) in ['suspended', 'blocked']);
+    }
+
+    // كل وصول للبيانات يمرّ من هنا: الحساب المقيد لا يقرأ ولا يكتب شيئًا في
+    // Firestore حتى لو عُدِّل التطبيق أو أُعيدت بياناته المحلية.
     function isSignedIn() {
-      return request.auth != null;
+      return request.auth != null && isAccountActive();
     }
 
     function isOwner(userId) {
@@ -60,11 +85,23 @@ service cloud.firestore {
     //  - لا يستطيع تعديل ownerUid / permissions / status / role (الكتابة على
     //    وثيقة عضويته ممنوعة إلا لإسقاط mustChangePassword فقط).
     //  - يقرأ بيانات المالك حسب الصلاحية (module/action) فقط.
-    //  - علاقته بالمخزن دائماً عبر request.auth.uid فلا يمكن تزويرها.
-    function memberDocActive(ownerUid) {
+    function isMemberOf(ownerUid) {
       return isSignedIn()
         && exists(/databases/$(database)/documents/users/$(ownerUid)/team_members/$(request.auth.uid))
         && get(/databases/$(database)/documents/users/$(ownerUid)/team_members/$(request.auth.uid)).data.status == 'active';
+    }
+
+    // المستخدم تابع لمالكه النشط (لا يمكنه إجراء عمليات):
+    //
+    // ⚠️ لا يُطبَّق هذا الفحص على مسار `users/{userId}` ولا على استعلامات
+    // collectionGroup: `accountStatusOf` تقرأ `users/$(ownerUid)`، وقراءة
+    // ذلك المسار تُعيد استدعاء القاعدة نفسها فتبلغ Firestore حدّ التداخل
+    // وترجع false دائماً — أي أن التابّع يفقد الوصول حتى لمالكه النشط.
+    // لذلك يبقى فحص "المالك موقوف" على بيانات الأعمال/العمال/المصروفات
+    // (memberCan/memberScoped) وعلى جانب العميل (AccountAccessGuard).
+    function memberDocActive(ownerUid) {
+      return isMemberOf(ownerUid)
+        && !(accountStatusOf(ownerUid) in ['suspended', 'blocked']);
     }
 
     // ===================== دعوة التفويض لحساب مسجّل مسبقاً =====================
@@ -148,17 +185,36 @@ service cloud.firestore {
         .hasAny(['userType', 'role', 'roleChangeAuthorizedBy']);
     }
 
+    // حالة الحساب (status) — لا يكتبها إلا Super Admin.
+    // تشترط كل مسارات الكتابة غير المدير‑العامة فحصها، فيستحيل على أي حساب
+    // (مفوضاً كان أو مالكاً) أن يُلغي تقييدَه بنفسه من Firestore مباشرة.
+    // (الحماية الحقيقية تبقى خارج القواعد: Cloud Function تتعطّل بـ disabled).
+function statusKeysTouched() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+      .hasAny(['status', 'isActive']);
+    }
+
     // مدير النظام فقط يملك تعديل حقول الصلاحيات. المدير العادي يستطيع
     // تحديث بيانات التشغيل المسموحة فقط، دون أي حقل غير مصرح به.
-    function adminWritableKeys() {
+function adminWritableKeys() {
       return ['fullName', 'businessName', 'phoneNumber', 'email', 'photoURL',
-              'appVersion', 'lastLoginAt', 'lastActivityAt', 'lastSyncAt',
-              'lastLoginMethod', 'status', 'updatedAt'];
+        'appVersion', 'lastLoginAt', 'lastActivityAt', 'lastSyncAt',
+        'lastLoginMethod', 'status', 'isActive', 'updatedAt'];
     }
 
     match /users/{userId} {
-      // القراءة المفردة: المالك لملفه الشخصي فقط، أو مدير معتمد (لوحة الإدارة).
-      allow get: if isOwner(userId) || isAdmin();
+      // القراءة المفردة:
+      // 1. المستخدم يقرأ ملفه الشخصي دائماً (حتى لو كان مقيداً، ليعرف التطبيق حالته).
+      // 2. أو مدير معتمد.
+      // 3. أو تابع يقرأ ملف مالكه.
+      //    ملاحظة: لا يُشترط هنا أن يكون المالك نشطاً — وضع `memberDocActive`
+      //    هنا يجعل `accountStatusOf(userId)` تقرأ `users/$(userId)` فتعيد
+      //    استدعاء هذه القاعدة، فيبلغ الحدّ ويرجع false دائماً فيُمنع التابّع
+      //    من قراءة مالكه حتى وهو نشط. حاجز الإيقاف هنا هو AccountAccessGuard
+      //    في العميل، وبيانات الأعمال محمية بـmemberCan في القواعد أدناه.
+      allow get: if (request.auth != null && request.auth.uid == userId)
+                 || isAdmin()
+                 || isMemberOf(userId);
       allow list: if isAdmin()
         || (isSignedIn() && resource.data.uid != null
             && resource.data.ownerUid == request.auth.uid);
@@ -179,14 +235,18 @@ service cloud.firestore {
             && request.resource.data.get('ownerUid', '') == request.auth.uid
             && request.resource.data.get('uid', '') == userId
             && request.auth.uid != userId);
-      allow update: if isSuperAdmin()
+allow update: if isSuperAdmin()
         || (isAdmin()
             && resource.data.get('userType', 'user') != 'super_admin'
             && request.resource.data.get('userType', 'user') != 'super_admin'
             && request.auth.uid != userId
-          && request.resource.data.diff(resource.data).affectedKeys()
+            // الإيقاف/التفعيل قرار إداري: الحقلان status وisActive ضمن
+            // adminWritableKeys ومصرّح بهما هنا. `statusKeysTouched()` تُطبَّق
+            // على فرع المالك أدناه فقط، لا على المدير — وإلا أُلغي الإيقاف
+            // اليدوي من اللوحة رغم أنه وظيفتها الأساسية.
+            && request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(adminWritableKeys())
-          && !privilegeKeysTouched())
+            && !privilegeKeysTouched())
         // أي مدير (وليس المدير العام فقط) يستطيع ترقية مستخدم عادي إلى مدير
         // مباشرة من قاعدة البيانات — بديل Cloud Functions على الخطة المجانية.
         // قيود صارمة: لا ترقية للنفس، لا ترقية لمدير عام، الترقية إلى 'admin'
@@ -202,7 +262,9 @@ service cloud.firestore {
             && request.resource.data.diff(resource.data).affectedKeys()
                  .hasOnly(ownerWritableKeys())
             // حتى المالك لا يعدّل حقول الصلاحيات على ملفه الشخصي.
-            && !privilegeKeysTouched())
+            && !privilegeKeysTouched()
+            // ولا يرفع حالة حسابه (status) بنفسه — التقييد قرار إدارة فقط.
+            && !statusKeysTouched())
         // تفعيل دعوة تفويض: العضو يسجّل خلفية المستخدم الثانوي (ownerUid/userType)
         // على حسابِه الحالي دون صلاحية ترقية نفسه — مفتاح التحقق هو دعوته النشطة.
         || (request.auth.uid == userId
@@ -214,9 +276,13 @@ service cloud.firestore {
             && request.resource.data.diff(resource.data).affectedKeys()
                  .hasOnly(['uid', 'ownerUid', 'userType', 'email', 'fullName',
                            'photoURL', 'inviteId', 'updatedAt']));
-      // حذف وثيقة المستخدم يتم حصريًا عبر Cloud Function (Admin SDK)
-      // حتى لا يُحذف البروفايل من عميل معدَّل ويبقى مسار تحقق الحظر صحيحًا.
-      allow delete: if false;
+      // حذف الحساب يتم عبر Cloud Function (Admin SDK) عند توفّرها، وهو
+      // المسار المفضّل لأنه يحذف حساب المصادقة نفسه.
+      // المسار البديل من العميل (بلا دالة منشورة) يحتاج Allows delete، لكن
+      // فقط للحساب النشط: الحساب suspended/blocked لا يحذف وثيقته أبداً،
+      // وإلا لتمكّن من التهرّب من التعليق بحذف الوثيقة ثم إعادة إنشائها
+      // (الحالة تُقرأ 'active' عند غياب الوثيقة).
+      allow delete: if isOwner(userId) && accountStatusOf(userId) == 'active';
 
       // ============ الأعمال وحركاتها ============
       // القراءة والتعديل يدعمان التفويض على مستوى السجل (memberScoped +
@@ -285,7 +351,9 @@ service cloud.firestore {
               && request.resource.data.get('status', '') == 'active'
               && memberInviteActiveById(
                     userId, request.resource.data.get('inviteId', '')));
-        allow delete: if isOwner(userId);
+        // المالك يحذف أي عضو، والعضو يحذف عضويته بنفسه (انسحاب).
+        // الانسحاب آمن: لا يمسّ وثيقة الحساب أو بيانات المالك إطلاقاً.
+        allow delete: if isOwner(userId) || request.auth.uid == memberUid;
         allow update: if isOwner(userId) || isAdmin()
           || (isSignedIn() && request.auth.uid == memberUid
               && resource.data.uid == memberUid
@@ -295,18 +363,29 @@ service cloud.firestore {
       }
 
       // جميع البيانات الفرعية الأخرى (أجهزة FCM وغيرها) تبقى للمالك فقط:
-      match /{document=**} {
+      // ⚠️ `{document=**}` يطابق صفر مقطع فأكثر، أي أنه يطابق وثيقة `users/{userId}`
+      // نفسها. وبما أن القواعد تُجمع بـOR، كان `allow write: if isOwner(userId)`
+      // يتجاوز كل القوائم البيضاء أعلاه (status / isActive / userType / role)
+      // فيستطيع المستخدم تعديل حسابه كاملاً — بما فيها status وisActive.
+      // `{sub}/{rest=**}` يشترط مقطعاً واحداً على الأقل، فيبقى الوصول
+      // للمجموعات الفرعية (أجهزة FCM وغيرها) كما كان، بلا ثغرة على الوثيقة.
+      match /{sub}/{rest=**} {
         allow read, write: if isOwner(userId);
       }
     }
 
-    // ===================== البحث عن عضوية (Collection Group) =====================
+    // ========== البحث عن عضوية (Collection Group) ==========
     // بعد تسجيل الدخول يبحث التطبيق عن وثيقة عضوية المستخدم عبر collectionGroup
     // لمعرفة صاحب الحساب. القاعدة تسمح فقط بقراءة وثيقة العضو نفسه
     // (resource.data.uid == request.auth.uid) فلا يمكن تتبع مستخدمين آخرين.
+    // ملاحظة: لا يُشترط هنا أن يكون المالك نشطاً — وضع `accountStatusOf`
+    //    هنا يقرأ `users/$(ownerUid)` فتعيد استدعاء قاعدة `users/{userId}`
+    //    التي تستدعي بدورها `accountStatusOf`، فيبلغ حدّ التداخل ويرجع
+    //    false دائماً فيفقد التابّع عضويته حتى لو كان مالكه نشطاً.
     match /{path=**}/team_members/{memberUid} {
       allow get: if isSignedIn() && resource.data.uid == request.auth.uid;
       allow list: if isSignedIn() && resource.data.uid == request.auth.uid;
+      allow delete: if request.auth.uid == memberUid;
     }
 
     // ===================== السجل السريع للمستخدمين التابعين =====================

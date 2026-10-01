@@ -79,6 +79,10 @@ class AccountRemoteDataSource {
         'phoneNumber': userData['phoneNumber'],
         'email': userData['email'],
         'userType': userData['userType'] ?? 'user',
+        // Bool صريح عند الإنشاء فقط. ممنوع في التحديث لأن القواعد ترفض
+        // أي محاولة غيره (isActive في statusKeysTouched) — لو
+        // أُرسل مع merge هنا لأُرفضت كتابة حساب موقوف.
+        'isActive': true,
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       };

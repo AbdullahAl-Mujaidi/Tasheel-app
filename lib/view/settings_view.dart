@@ -1,4 +1,6 @@
 import 'package:fkra/controller/settings_controller.dart';
+import 'package:fkra/services/account_deletion_service.dart';
+import 'package:fkra/services/member_session_service.dart';
 import 'package:fkra/view/login_view.dart';
 import 'package:fkra/view/team_members_view.dart';
 import 'package:flutter/material.dart';
@@ -333,7 +335,7 @@ class SettingsPage extends StatelessWidget {
                     ],
                   ),
                 ],
-              ),
+),
             ),
           ),
         );
@@ -1042,6 +1044,30 @@ class SettingsPage extends StatelessWidget {
             ),
           ),
         ),
+        Container(
+          margin: EdgeInsets.only(right: 15, left: 15, top: 10),
+          child: TextButton(
+            onPressed: () => _confirmDeleteAccount(context, controller, colorScheme),
+            child: Row(
+              children: [
+                Spacer(),
+                Text("حذف الحساب نهائياً",
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: colorScheme.error)),
+                SizedBox(width: 10),
+                Icon(Icons.delete_forever, color: colorScheme.error),
+                Spacer(),
+              ],
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(15, 0, 15, 20),
+          child: Text(
+            "يحذف حسابك وكل بياناتك نهائياً ولا يمكن التراجع. إن كنت مفوّضاً لدى مالك "
+            "فسيُحذف تفويضك منه فقط دون المساس ببياناته.",
+            style: TextStyle(fontSize: 12, color: colorScheme.outline, height: 1.5),
+          ),
+        ),
       ],
     );
   }
@@ -1071,6 +1097,224 @@ class SettingsPage extends StatelessWidget {
         }
       },
     ).show();
+  }
+
+  // ========== حذف الحساب ==========
+  // ثلاث خطوات في الحوار الواحد حتى لا نخلط "نعم متأكد" بـ"أريد الحذف":
+  //   1) إدراك بالعواقب (بيانات + لا رجعة + أثره على تفويضه إن كان مفوّضاً).
+  //   2) إعادة تأكيد الهوية (إلزامية — الخادم يرفض توكناً قديماً).
+  //   3) تنفيذ الحذف + معالجة النتيجة (فرق بين "فشل الخادم" و"نجح لكن تعذّر
+  //      تنظيف الجهاز").
+  Future<void> _confirmDeleteAccount(
+    BuildContext context,
+    SettingsController controller,
+    ColorScheme colorScheme,
+  ) async {
+    final service = AccountDeletionService.instance;
+
+    // 1) إدراك بالعواقب.
+    final aware = await _showDeleteAwareDialog(context, colorScheme);
+    if (aware != true) return;
+    if (!context.mounted) return;
+
+    // 2) إعادة تأكيد الهوية.
+    final reauthed = await _showReauthDialog(context, service, colorScheme);
+    if (reauthed != true) return;
+    if (!context.mounted) return;
+
+    // 3) التنفيذ.
+    final result = await service.deleteMyAccount();
+    if (!context.mounted) return;
+
+    if (result.fullySucceeded) {
+      await AccountDeletionService.redirectToLogin(
+        context,
+        message: result.removedMemberships > 0
+            ? 'تم حذف حسابك نهائياً وإزالة تفويضك من ${result.removedMemberships} حساب.'
+            : 'تم حذف حسابك وكل بياناتك نهائياً.',
+        backgroundColor: Colors.green,
+      );
+      return;
+    }
+
+    // نوجّه لشاشة الدخول دائماً إذا حذف الخادم شيئاً، حتى مع بقاء حساب
+    // المصادقة: بياناتك لم تعد موجودة، والبقاء داخل التطبيق بلا معنى.
+    if (result.serverSucceeded) {
+      await AccountDeletionService.redirectToLogin(
+        context,
+        message: result.firestoreOnlyFallback
+            ? 'حُذفت كل بياناتك من تسهيل وعضوياتك (${result.removedMemberships}). '
+                'لم يُحذف حساب الدخول نفسه لأن خدمة الخادم غير مفعّلة — بريدك سيبقى محجوزاً.'
+            : result.authAccountLeftBehind
+                ? 'حُذفت بياناتك نهائياً، وتعذّر إنهاء جلسة الدخول على الخادم. تواصل مع الإدارة.'
+                : (result.errorMessage ??
+                    'حُذف حسابك لكن تعذّر تنظيف بيانات هذا الجهاز.'),
+        backgroundColor: result.firestoreOnlyFallback
+            ? colorScheme.error
+            : result.authAccountLeftBehind
+                ? colorScheme.error
+                : (result.localPurged ? Colors.green : colorScheme.error),
+      );
+      return;
+    }
+
+    // فشل تام: لم يُحذف شيء على الخادم ⇒ لا نمسح بيانات الجهاز ولا نخرج.
+    final msg = result.errorMessage ?? 'تعذّر حذف الحساب.';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), backgroundColor: colorScheme.error),
+    );
+  }
+
+  Future<bool?> _showDeleteAwareDialog(
+      BuildContext context, ColorScheme colorScheme) async {
+    final session = MemberSessionService.instance;
+    final isDelegate = session.isSubUser;
+    final ownerName = isDelegate ? session.activeDelegatedOwnerName : null;
+
+    return await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: Icon(Icons.warning_amber_rounded, color: colorScheme.error, size: 40),
+        title: const Text('حذف الحساب نهائياً'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('سيؤدي هذا إلى:'),
+              const SizedBox(height: 10),
+              const Text('• حذف حسابك وكل بياناتك نهائياً (الأعمال، الحركات، المصروفات، العمال).'),
+              const Text('• حذف بيانات هذا التطبيق من هذا الجهاز.'),
+              const Text('• لا يمكن التراجع أو الاسترجاع.'),
+              if (isDelegate) ...[
+                const SizedBox(height: 10),
+                Text(
+                  '• لأنك مفوّض لدى ${ownerName ?? 'مالك'}، سيُحذف تفويضك عنده فقط '
+                  'ولا تُمسّ بيانات مالكك.',
+                  style: TextStyle(fontWeight: FontWeight.bold, color: colorScheme.primary),
+                ),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: colorScheme.error),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('فهمت، متابعة'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<bool?> _showReauthDialog(
+    BuildContext context,
+    AccountDeletionService service,
+    ColorScheme colorScheme,
+  ) async {
+final needsPassword = service.requiresPassword();
+    final passwordCtrl = TextEditingController();
+    bool busy = false;
+    String? error;
+    // نحتفظ بمسار الحوار لانتظار إزالته الفعلية من الشجرة (وليس مجرد طلب
+    // pop) — دمج المكدس أثناء حركة خروجه هو ما يسبّب انهيار
+    // `_dependents.isEmpty`.
+    ModalRoute<dynamic>? dialogRoute;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        dialogRoute ??= ModalRoute.of(ctx);
+        return StatefulBuilder(
+          builder: (ctx, setState) => AlertDialog(
+          icon: Icon(Icons.lock_outline, color: colorScheme.error),
+          title: const Text('تأكيد هويتك'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('لحماية حسابك، أعد تأكيد هويتك قبل الحذف.'),
+              if (needsPassword) ...[
+                const SizedBox(height: 16),
+                TextField(
+                  controller: passwordCtrl,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'كلمة المرور',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+              if (error != null) ...[
+                const SizedBox(height: 12),
+                Text(error!,
+                    style: TextStyle(color: colorScheme.error, fontSize: 13)),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: busy ? null : () => Navigator.of(ctx).pop(false),
+              child: const Text('إلغاء'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: colorScheme.error),
+              onPressed: busy
+                  ? null
+                  : () async {
+                      setState(() {
+                        busy = true;
+                        error = null;
+                      });
+                      try {
+                        if (needsPassword) {
+                          if (passwordCtrl.text.isEmpty) {
+                            throw AccountDeletionException('أدخل كلمة المرور');
+                          }
+                          await service.reauthenticateWithPassword(passwordCtrl.text);
+                        } else {
+                          await service.reauthenticateWithGoogle();
+                        }
+                        if (ctx.mounted) Navigator.of(ctx).pop(true);
+                      } catch (e) {
+                        setState(() {
+                          busy = false;
+                          error = e is AccountDeletionException
+                              ? e.message
+                              : 'تعذّر التأكيد. تحقّق من كلمة المرور.';
+                        });
+                      }
+                    },
+              child: busy
+                  ? const SizedBox(
+                      width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  : Text(needsPassword ? 'تأكيد وحذف' : 'تأكيد عبر Google'),
+            ),
+          ],
+        ),
+        );
+      },
+    );
+    // ⚠️ الترتيب حاسم: ننتظر إزالة الحوار من الشجرة *قبل* إتلاف الـ
+    // controller. الـTextField يبقى mounted ويبني إطارات متتابعة طوال حركة
+    // الخروج، فإتلاف الـcontroller قبل ذلك يُسقط
+    // `TextEditingController was used after being disposed` ويترك الشجرة في
+    // حالة تالفة (RenderFlex overflow ثم `_dependents.isEmpty`).
+    final dialogCompleted = dialogRoute?.completed;
+    if (dialogCompleted != null) {
+      await dialogCompleted.timeout(
+        const Duration(seconds: 1),
+        onTimeout: () {},
+      );
+    }
+    passwordCtrl.dispose();
+    return ok;
   }
 
   // ========== دوال التحقق ==========

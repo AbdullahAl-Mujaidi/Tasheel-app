@@ -19,6 +19,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../core/constants/app_constants.dart';
 import '../core/network/connectivity_service.dart';
 import '../model/team_member_model.dart';
+import 'account_status_service.dart';
 
 class MemberSessionService extends ChangeNotifier {
   MemberSessionService._();
@@ -383,7 +384,7 @@ class MemberSessionService extends ChangeNotifier {
         } catch (_) {}
       }
       final found = await _repo.findMembershipByUid(uid);
-      if (found != null) {
+      if (found != null && found.isActive) {
         _member = found;
         _ownerUid = found.ownerUid;
         await _repo.saveMemberCached(found);
@@ -420,8 +421,24 @@ class MemberSessionService extends ChangeNotifier {
     // إعادة فتح التطبيق أو نافذة المفوضين) وتحديث قائمة التفويضات.
     await fetchDelegations();
     try {
+      // فحص حالة المالك (هل أصبح موقوفاً؟)
+      final ownerStatus = await AccountStatusService.instance.checkUid(_ownerUid);
+      if (ownerStatus == AccountAccessState.suspended) {
+        // ⭐ المالك موقوف وحسابي أنا نشط ⇒ ألغِ التفويض وارجعني لحسابي
+        // الشخصي. (كان `switchToPersonal()` هنا أيضاً صحيحاً، لكن كان الحارس
+        // afterwards يخرج المستخدم من حسابه بالكامل فينكبه.)
+        print('refreshMemberProfile: المالك موقوف — يُلغى التفويض للحساب الشخصي');
+        await switchToPersonal();
+        return;
+      }
+
       final fresh = await _repo.fetchMember(_ownerUid, user.uid);
       if (fresh != null) {
+        if (!fresh.isActive) {
+          print('refreshMemberProfile: تم تعطيل عضوية التابع، جارٍ الخروج');
+          await switchToPersonal();
+          return;
+        }
         _member = fresh;
         _ownerUid = fresh.ownerUid;
         await _repo.saveMemberCached(fresh);
@@ -451,6 +468,20 @@ class MemberSessionService extends ChangeNotifier {
     if (!isSubUser || _ownerUid.isEmpty || _ownerUid == user.uid) return;
     final ownerNow = _ownerUid;
     try {
+      // ⚠️ فحص حالة المالك أولاً: قراءة وثيقة العضوية ستُرفض بالقواعد
+      // (memberDocActive) بعد إيقاف المالك، فيرمي الاستثناء ويُبتلع في
+      // `catch` أدناه — فتُحفظ الجلسة والكاش وكأن شيئاً لم يحدث. الفحص
+      // الصريح يجعل الإيقاف ظاهراً بدل الاعتماد على استثناء.
+      final ownerState = await AccountStatusService.instance.checkUid(ownerNow);
+      if (ownerState == AccountAccessState.suspended) {
+        // ⭐ المالك موقوف ⇒ يُلغى نطاق التفويض ويُعاد للحساب الشخصي بدل
+        // ترك الجلسة تشير إلى مالك موقوف (فيُبتلع PERMISSION_DENIED في catch).
+        print(
+            'refreshMembershipBeforeScope: المالك موقوف — يُلغى التفويض للحساب الشخصي');
+        await switchToPersonal();
+        return;
+      }
+
       final fresh = await _repo.fetchMember(ownerNow, user.uid);
       if (fresh != null && fresh.isActive) {
         _member = fresh;

@@ -1,17 +1,109 @@
 // lib/views/report_view.dart
+import 'package:fkra/controller/business_controller.dart';
+import 'package:fkra/controller/expense_controller.dart';
 import 'package:fkra/controller/report_controller.dart';
+import 'package:fkra/controller/workers_controller.dart';
+import 'package:fkra/model/team_member_model.dart';
+import 'package:fkra/services/member_session_service.dart';
+import 'package:fkra/view/business_reports_view.dart';
+import 'package:fkra/view/expense_reports_view.dart';
+import 'package:fkra/view/worker_reports_view.dart';
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:provider/provider.dart';
 
-class ReportsPage extends StatelessWidget {
+class ReportsPage extends StatefulWidget {
   final String userId;
   const ReportsPage({super.key, required this.userId});
 
   @override
+  State<ReportsPage> createState() => _ReportsPageState();
+}
+
+class _ReportsPageState extends State<ReportsPage> {
+  /// نوع التقرير الجاري تحميله — يمنع الضغط المتكرر أثناء التحميل.
+  String? _opening;
+
+  /// نفس منطق `home_page._canRead`: المالك يرى كل شيء، والمفوّض يرى ما
+  /// مُنحت له صلاحية قراءته فقط. تقرير الأعمال يحوي أسماء وأرقاماً، فلا
+  /// يُفتح لمن لا يملك صلاحية `businesses`.
+  bool _canRead(String module) {
+    if (!MemberSessionService.instance.isSubUser) return true;
+    final member = MemberSessionService.instance.member;
+    if (member == null) return false;
+    return member.canRead(module);
+  }
+
+  /// ينتظر انتهاء تهيئة المتحكّم (تُستدعى في الـconstructor عبر `_init`).
+  Future<void> _waitLoaded(ChangeNotifier c, bool Function() isLoading) async {
+    var waited = 0;
+    while (isLoading() && waited < 8000) {
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      waited += 80;
+    }
+  }
+
+  Future<void> _openBusinessReports() async {
+    if (_opening != null) return;
+    setState(() => _opening = 'businesses');
+    final c = BusinessController(userId: widget.userId);
+    try {
+      await _waitLoaded(c, () => c.isLoading);
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => BusinessReportsView(
+            businesses: c.businesses,
+            transactions: c.transactions,
+          ),
+        ),
+      );
+    } finally {
+      c.dispose();
+      if (mounted) setState(() => _opening = null);
+    }
+  }
+
+  Future<void> _openWorkerReports() async {
+    if (_opening != null) return;
+    setState(() => _opening = 'workers');
+    final c = WorkersController(userId: widget.userId);
+    try {
+      await _waitLoaded(c, () => c.isLoading);
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => WorkerReportsView(workers: c.workers),
+        ),
+      );
+    } finally {
+      c.dispose();
+      if (mounted) setState(() => _opening = null);
+    }
+  }
+
+  Future<void> _openExpenseReports() async {
+    if (_opening != null) return;
+    setState(() => _opening = 'expenses');
+    final c = ExpenseController(userId: widget.userId);
+    try {
+      await _waitLoaded(c, () => c.isLoading);
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ExpenseReportsView(expenses: c.expenses),
+        ),
+      );
+    } finally {
+      c.dispose();
+      if (mounted) setState(() => _opening = null);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
-      create: (_) => ReportController(userId: userId),
+      create: (_) => ReportController(userId: widget.userId),
       child: Consumer<ReportController>(
         builder: (context, controller, child) {
           final colorScheme = Theme.of(context).colorScheme;
@@ -137,6 +229,9 @@ class ReportsPage extends StatelessWidget {
                       ),
                     ),
 
+                    // اختصارات التقارير التفصيلية (نسخة من أزرار الأقسام)
+                    _buildReportShortcuts(colorScheme),
+
                     // أداء اليوم
                     _buildTodayPerformanceCard(controller, colorScheme),
 
@@ -153,6 +248,109 @@ class ReportsPage extends StatelessWidget {
             ),
           );
         },
+      ),
+    );
+  }
+
+  // ========== قائمة التقارير التفصيلية ==========
+  ///
+  /// زر واحد يفتح قائمة منسدلة بالتقارير المتاحة، بدل ثلاثة أزرار عمودية
+  /// تستهلك ارتفاع الشاشة وتلخّص عناوينها على الشاشات الضيقة.
+  /// يُخفى ما لا يملك العضو صلاحية قراءته.
+  Widget _buildReportShortcuts(ColorScheme colorScheme) {
+    final items = <({String label, String key, IconData icon, VoidCallback onTap})>[
+      if (_canRead(TeamPermissions.businesses))
+        (
+          label: 'تقارير الأعمال',
+          key: 'businesses',
+          icon: Icons.card_travel,
+          onTap: _openBusinessReports,
+        ),
+      if (_canRead(TeamPermissions.workers))
+        (
+          label: 'تقارير العمال',
+          key: 'workers',
+          icon: Icons.groups_2,
+          onTap: _openWorkerReports,
+        ),
+      if (_canRead(TeamPermissions.expenses))
+        (
+          label: 'تقارير المصروفات',
+          key: 'expenses',
+          icon: Icons.attach_money,
+          onTap: _openExpenseReports,
+        ),
+    ];
+
+    // لا صلاحية لأي تقرير ⇒ لا نعرض زراً بلا فائدة.
+    if (items.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      child: PopupMenuButton<String>(
+        enabled: _opening == null,
+        onSelected: (key) {
+          for (final item in items) {
+            if (item.key == key) {
+              item.onTap();
+              return;
+            }
+          }
+        },
+        color: colorScheme.surface,
+        elevation: 6,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        position: PopupMenuPosition.under,
+        itemBuilder: (context) => [
+          for (final item in items)
+            PopupMenuItem<String>(
+              value: item.key,
+              height: 48,
+              child: Row(
+                children: [
+                  Icon(item.icon, size: 20, color: colorScheme.primary),
+                  const SizedBox(width: 12),
+                  Text(
+                    item.label,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            ),
+        ],
+        child: Container(
+          width: double.infinity,
+          height: 46,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          decoration: BoxDecoration(
+            color: colorScheme.surface,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: colorScheme.outline),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (_opening != null)
+                const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else
+                Icon(Icons.leaderboard, size: 18, color: colorScheme.primary),
+              const SizedBox(width: 10),
+              Text(
+                _opening != null ? 'جارٍ فتح التقرير…' : 'التقارير',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: colorScheme.primary,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Icon(Icons.arrow_drop_down, color: colorScheme.primary),
+            ],
+          ),
+        ),
       ),
     );
   }

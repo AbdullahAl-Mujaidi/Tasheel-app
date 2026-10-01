@@ -7,6 +7,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:fkra/admin/services/firebase_usage_tracker.dart';
+import 'package:fkra/services/account_status_service.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
 class AuthRemoteDataSource {
@@ -95,20 +96,15 @@ class AuthRemoteDataSource {
     }
   }
 
-  /// فحص ما إذا كان الحساب معلّقاً (status = blocked/suspended من لوحة المدير).
+  /// فحص ما إذا كان الحساب معلّقاً (حالة الحساب = users/{uid}.status).
+  ///
+  /// ⚠️ كان هنا `Source.serverAndCache` مع `catch → false`، أي أن كاشاً
+  /// قديماً أو انقطاعاً قصيراً كانا يعنيان "غير مقيَّد" ⇒ تجاوز للتقييد.
+  /// الآن القراءة من الخادم مباشرة عبر الخدمة الموحّدة، وعند تعذّر القراءة
+  /// تُحفظ آخر حالة معروفة بدل افتراض السماح.
   Future<bool> isAccountBlocked(String uid) async {
-    try {
-      final doc = await _firestore
-          .collection('users')
-          .doc(uid)
-          .get(const GetOptions(source: Source.serverAndCache));
-      FirebaseUsageTracker.instance.recordRead();
-      if (!doc.exists) return false;
-      final status = doc.data()?['status']?.toString();
-      return status == 'blocked' || status == 'suspended';
-    } catch (_) {
-      return false;
-    }
+    final state = await AccountStatusService.instance.checkUid(uid);
+    return state == AccountAccessState.suspended;
   }
 
   /// تعبئة بروفايل المستخدم من بيانات Google (فجوات فقط لا تكتب فوق بياناته).
@@ -128,6 +124,8 @@ class AuthRemoteDataSource {
           'email': email ?? '',
           'photoURL': photoURL ?? '',
           'userType': 'user',
+          // يُكتب عند الإنشاء فقط؛ التحديثات محرّمة عليه (statusKeysTouched).
+          'isActive': true,
           'lastLoginMethod': 'google',
           'lastLoginAt': FieldValue.serverTimestamp(),
           'createdAt': FieldValue.serverTimestamp(),
